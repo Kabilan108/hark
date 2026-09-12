@@ -3,4 +3,4 @@ Allow: /
 Disallow: /api/
 Disallow: /hooks/
 
-Sitemap: https://sietch.sole-pierce.ts.net:8443/sitemap.xml
+Sitemap: https://hark.sole-pierce.ts.net/sitemap.xml

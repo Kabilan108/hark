@@ -91,9 +91,9 @@ describe("parseInline", () => {
       { kind: "code", text: "body" },
       { kind: "text", text: " is required." },
     ]);
-    expect(parseInline("Sign in at [Hark](https://sietch.sole-pierce.ts.net:8443).")).toEqual([
+    expect(parseInline("Sign in at [Hark](https://hark.sole-pierce.ts.net).")).toEqual([
       { kind: "text", text: "Sign in at " },
-      { kind: "link", text: "Hark", href: "https://sietch.sole-pierce.ts.net:8443" },
+      { kind: "link", text: "Hark", href: "https://hark.sole-pierce.ts.net" },
       { kind: "text", text: "." },
     ]);
   });
@@ -115,7 +115,7 @@ describe("docsMarkdown", () => {
 
   it("emits fenced code with a language and pipe tables", () => {
     expect(markdown).toContain(
-      "```bash\ncurl -X POST https://sietch.sole-pierce.ts.net:8443/hooks/whk_your_token",
+      "```bash\ncurl -X POST https://hark.sole-pierce.ts.net/hooks/whk_your_token",
     );
     expect(markdown).toContain('```json\n{\n  "ok": true,');
     expect(markdown).toContain("| Field | Type | Description |");
@@ -153,11 +153,11 @@ describe("llmsTxt", () => {
   it("describes Hark and links its canonical machine-readable resources", () => {
     const text = llmsTxt();
     expect(text.startsWith("# Hark")).toBe(true);
-    expect(text).toContain("https://sietch.sole-pierce.ts.net:8443/docs");
-    expect(text).toContain("https://sietch.sole-pierce.ts.net:8443/docs.md");
-    expect(text).toContain("https://sietch.sole-pierce.ts.net:8443/agents.md");
-    expect(text).toContain("https://sietch.sole-pierce.ts.net:8443/docs#cli-permissions");
-    expect(text).toContain("https://sietch.sole-pierce.ts.net:8443/pricing");
+    expect(text).toContain("https://hark.sole-pierce.ts.net/docs");
+    expect(text).toContain("https://hark.sole-pierce.ts.net/docs.md");
+    expect(text).toContain("https://hark.sole-pierce.ts.net/agents.md");
+    expect(text).toContain("https://hark.sole-pierce.ts.net/docs#cli-permissions");
+    expect(text).toContain("https://hark.sole-pierce.ts.net/pricing");
     expect(text).toContain("node packages/harkctl/bin/harkctl.mjs");
     expect(text).toContain("HARK_API_URL");
   });

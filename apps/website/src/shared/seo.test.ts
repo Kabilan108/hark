@@ -22,7 +22,7 @@ describe("SEO metadata", () => {
 
     for (const page of pages) {
       expect(page.index).toBe(true);
-      expect(absoluteUrl(page.path)).toMatch(/^https:\/\/sietch\.sole-pierce\.ts\.net:8443\//);
+      expect(absoluteUrl(page.path)).toMatch(/^https:\/\/hark\.sole-pierce\.ts\.net\//);
     }
   });
 
@@ -74,7 +74,7 @@ describe("crawler files", () => {
   it("points crawlers to the sitemap without hiding pages that carry noindex", async () => {
     const robots = await readFile(resolve(publicDir, "robots.txt"), "utf8");
     expect(robots).toContain("User-agent: *");
-    expect(robots).toContain("Sitemap: https://sietch.sole-pierce.ts.net:8443/sitemap.xml");
+    expect(robots).toContain("Sitemap: https://hark.sole-pierce.ts.net/sitemap.xml");
     expect(robots).not.toContain("Disallow: /dashboard");
     expect(robots).not.toContain("Disallow: /cli/authorize");
   });
