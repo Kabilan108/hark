@@ -34,6 +34,8 @@ A separate fixture exercised the production native receiver through real FCM wit
 
 Real backend activity start/update/end also passed with the app in the background. The status-bar chip was visible and Android dumpsys reported `PROMOTED_ONGOING` with `android.requestPromotedOngoing=true`. A terminal update displayed and disappeared after its configured two-second delay. Promotion was confirmed from this specific background test, not inferred from FCM acceptance or from the earlier empty notification-shade capture.
 
+A final real System UI Unpin check also passed. Unpin persisted the activity's dismissed state, and a subsequent backend update was accepted without reposting its notification. Test activities were ended, the temporary CLI authorization was revoked, and temporary OAuth material was removed. The emulator remains signed in with notifications allowed.
+
 ## Remaining phone coverage
 
 Pixel 9 installation, Google sign-in on the physical phone, manufacturer presentation of Live Updates, lock-screen behavior, and battery/Doze behavior need user-assisted testing. Android renders activities using its standard progress layout; Apple-specific visual skins, source avatars, and native service threading are not ported.
