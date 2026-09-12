@@ -45,3 +45,9 @@ Pixel 9 installation, Google sign-in on the physical phone, manufacturer present
 Version code 2 follows the Android system theme across app screens, status bars, and the native root background, with a dark splash background. Expo type checking, scoped Biome checks, and the signed dual-ABI release build passed. Installing over the previous emulator release preserved login. Dark inbox and settings were inspected, and switching an open settings screen back to light mode updated its colors and status bar without restarting the app.
 
 The download now serves `/vault/userdata/hark/builds/hark-1.2.1-android-release.apk`, SHA-256 `9db6ce72f13eb1fc7170ffbaa5de03713987f5ab1a5e0266ebe2c56beeeb0969`. The earlier 1.2.0 artifact remains archived.
+
+## Live-service migration, version 1.2.2
+
+The canonical origin is now `https://hark.sole-pierce.ts.net`. Google OAuth callback configuration was saved and read back; real browser sign-in on this hostname succeeded. Signed APK version code 3 was installed over the emulator app, preserving login, and its device registration refreshed through the live backend. A service webhook targeted only the emulator and its notification rendered. The old user backend is inactive; only the NixOS service remains active. The old 8443 mapping was removed, with an exact before/after comparison confirming every other mapping was preserved.
+
+Backend production build, CLI tests, APK signature verification, and download hash verification passed. Artifact: `hark-android-1.2.2.apk`, SHA-256 `2db547c5ed0417c41ee82942d7d5292634e7f3c552238df7507114a032730e78`.

@@ -29,7 +29,7 @@ if (!googleServicesFile && process.env.EXPO_PUBLIC_PREVIEW_MODE !== "1") {
 
 const android: ExpoConfig["android"] = {
   package: "dev.kabilan.hark",
-  versionCode: 2,
+  versionCode: 3,
   icon: "./assets/icon.png",
   adaptiveIcon: {
     foregroundImage: "./assets/icon.png",
@@ -42,7 +42,7 @@ const android: ExpoConfig["android"] = {
 export default ({ config: _config }: ConfigContext): ExpoConfig => ({
   name: "Hark",
   slug: "hark-android",
-  version: "1.2.1",
+  version: "1.2.2",
   icon: "./assets/icon.png",
   scheme: "hark-android",
   orientation: "portrait",

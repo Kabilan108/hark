@@ -109,13 +109,13 @@ export function llmsTxt(): string {
 
 - [Documentation](${DOCS_URL}): ${DOCS_TITLE} — quickstart, Notification API, Activity API, CLI, and coding-agent permissions.
 - [Documentation as markdown](${DOCS_MARKDOWN_URL}): the same content as plain markdown.
-- [Agent documentation](https://sietch.sole-pierce.ts.net:8443/agents.md): agent-oriented alias of the complete Markdown docs.
-- [Coding-agent permission setup](https://sietch.sole-pierce.ts.net:8443/docs#cli-permissions): Claude Code, Codex, OpenCode V1, and OpenCode V2.
+- [Agent documentation](https://hark.sole-pierce.ts.net/agents.md): agent-oriented alias of the complete Markdown docs.
+- [Coding-agent permission setup](https://hark.sole-pierce.ts.net/docs#cli-permissions): Claude Code, Codex, OpenCode V1, and OpenCode V2.
 
 ## Product
 
-- [Home](https://sietch.sole-pierce.ts.net:8443/): product overview and webhook example.
-- [Pricing](https://sietch.sole-pierce.ts.net:8443/pricing): self-hosting requirements and included features.
+- [Home](https://hark.sole-pierce.ts.net/): product overview and webhook example.
+- [Pricing](https://hark.sole-pierce.ts.net/pricing): self-hosting requirements and included features.
 
 ## Agent tools
 

@@ -19,7 +19,7 @@
 import type { DocItemId, DocSectionId } from "./nav";
 
 /** Placeholder webhook URL used throughout the docs samples. */
-export const EXAMPLE_ENDPOINT = "https://sietch.sole-pierce.ts.net:8443/hooks/whk_your_token";
+export const EXAMPLE_ENDPOINT = "https://hark.sole-pierce.ts.net/hooks/whk_your_token";
 
 export interface DocFieldRow {
   name: string;
@@ -83,8 +83,8 @@ export interface DocSection {
 
 /** Page title, reused by the HTML `<h1>`, the prerendered `<title>`, and the markdown. */
 export const DOCS_TITLE = "Webhooks to Android notifications";
-export const DOCS_URL = "https://sietch.sole-pierce.ts.net:8443/docs";
-export const DOCS_MARKDOWN_URL = "https://sietch.sole-pierce.ts.net:8443/docs.md";
+export const DOCS_URL = "https://hark.sole-pierce.ts.net/docs";
+export const DOCS_MARKDOWN_URL = "https://hark.sole-pierce.ts.net/docs.md";
 
 export const DOC_CONTENT: DocSection[] = [
   {
@@ -110,7 +110,7 @@ export const DOC_CONTENT: DocSection[] = [
           {
             kind: "steps",
             items: [
-              "Sign in at your Hark deployment. The maintained instance is [sietch.sole-pierce.ts.net:8443](https://sietch.sole-pierce.ts.net:8443).",
+              "Sign in at your Hark deployment. The maintained instance is [hark.sole-pierce.ts.net](https://hark.sole-pierce.ts.net).",
               "Build and install the Android app for your Hark deployment, then sign in with Google to register the device.",
               "Create a service in the dashboard and give it a title and optional tap URL.",
               "Copy the secret webhook URL it returns.",
@@ -858,7 +858,7 @@ curl -X POST ${EXAMPLE_ENDPOINT}/events/evt_Cxns2IdbF4H0TJYq/cancel`,
           {
             kind: "code",
             language: "bash",
-            code: `HARK_API_URL=https://sietch.sole-pierce.ts.net:8443 \\
+            code: `HARK_API_URL=https://hark.sole-pierce.ts.net \\
   node packages/harkctl/bin/harkctl.mjs auth login`,
           },
           {
@@ -930,7 +930,7 @@ harkctl permissions doctor`,
     "title": "Release bot",
     "imageUrl": "https://example.com/bot.png"
   },
-  "webhookUrl": "https://sietch.sole-pierce.ts.net:8443/hooks/hook_..."
+  "webhookUrl": "https://hark.sole-pierce.ts.net/hooks/hook_..."
 }`,
           },
           {

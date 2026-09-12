@@ -18,7 +18,7 @@ direnv exec "$PWD" corepack pnpm --filter @hark/website build
 
 Start from `apps/website` with `node --env-file=/absolute/path/backend.env dist/server/index.js` inside the dev shell. This working directory is required for the static assets and migrations. The process runs migrations before listening. Its health endpoint is `/api/health`.
 
-On sietch, Hark uses `https://sietch.sole-pierce.ts.net:8443`, proxied by Tailscale Serve to `127.0.0.1:8787`. Port 443 belongs to T3. Preserve existing Serve mappings. External webhook senders cannot reach this private endpoint; a public deployment or separately authorized ingress is needed for them.
+On sietch, Hark uses `https://hark.sole-pierce.ts.net`, proxied by Tailscale Services to `127.0.0.1:8787`. The base host port 443 belongs to T3. Preserve other Serve mappings. External webhook senders cannot reach this private endpoint; a public deployment or separately authorized ingress is needed for them.
 
 Docker Compose mounts persistent SQLite data and the server-only FCM credential. It binds the host port to loopback, suitable for a local HTTPS proxy. A Railway deployment can use the Dockerfile with a persistent volume at `/data` and a securely mounted or provisioned credential file. Never use an ephemeral SQLite filesystem for deployment.
 
@@ -58,27 +58,12 @@ Keep release signing material outside Git and retain it for future upgrades. Emu
 
 Use SQLite's online backup operation while the process runs. Do not copy only the main database file while WAL writes are active. A clean shutdown checkpoints the WAL. Restore a backup to a separate path and run `PRAGMA integrity_check` before relying on it.
 
-## User service on sietch
-
-`deploy/hark.service` runs this checkout through its Nix environment and `scripts/start-backend`, with automatic restart on failure. It assumes the checkout is at `~/experiments/hark` and the backend environment is linked at `.env`. Install the unit into `~/.config/systemd/user/`, then use `systemctl --user enable --now hark`. Stop any existing process on port 8787 first. Sietch has user lingering enabled, so the service can start without an interactive login.
-
-After a backend build, restart with `systemctl --user restart hark`. Logs are available through `journalctl --user -u hark`. Copy the verified release APK into `apps/website/dist/client/downloads/hark-android-<version>.apk` after each web build, preserving the version suffix in the download URL. The current release is `/downloads/hark-android-1.2.1.apk`.
-
 ## NixOS service on sietch
 
-The dotfiles module `~/dotfiles/modules/nixos/selfhost/hark.nix` declares a system service and `selfhost.tailnetServices.hark.port = 8787`. After activation, Tailscale Services advertises `https://hark.sole-pierce.ts.net` and proxies to the loopback backend. The existing host endpoint on port 8443 and T3's port 443 mapping remain in place.
+The active system service is declared in `~/dotfiles/modules/nixos/selfhost/hark.nix`. It runs Node 24 against this checkout's built website, reads `/vault/userdata/hark/secrets/backend.env`, and uses the existing SQLite database. It does not build during boot. Keep the checkout, dependencies, built assets, and private environment file available. Secrets stay outside the Nix store.
 
-The system service runs Node 24 against this checkout's built website. It reads `/vault/userdata/hark/secrets/backend.env` and uses the existing SQLite data. It does not build the application during boot. Keep the checkout, dependencies, built assets, and private environment file available. Secrets stay outside the Nix store.
+Use `sudo systemctl restart hark` after backend builds and `journalctl -u hark` for logs. The former user service is disabled and inactive. Its old port-8443 Tailscale mapping has been removed. T3 and other Tailscale Services are unchanged.
 
-Activate from your terminal after reviewing the dotfiles changes. Stop the old user service first to free port 8787:
+The canonical origin, app API URL, CLI default, and Google OAuth callback now use `https://hark.sole-pierce.ts.net`. The Google redirect is `/api/auth/callback/google` on that origin. Existing webhook tokens remain valid with the new hostname; copy the updated URL from the dashboard.
 
-```sh
-systemctl --user disable --now hark
-sudo nixos-rebuild switch --flake ~/dotfiles#sietch
-systemctl status hark
-curl --fail https://hark.sole-pierce.ts.net/api/health
-```
-
-If activation fails before the system service takes over, restore the old service with `systemctl --user enable --now hark`. After migration, use `sudo systemctl restart hark` and `journalctl -u hark` instead of the user-service commands above.
-
-The installed Android app and Google OAuth still use the existing port-8443 origin. The new service can carry webhooks and API traffic after activation. Moving the canonical sign-in URL requires adding `https://hark.sole-pierce.ts.net/api/auth/callback/google` to the Google OAuth client, changing backend `APP_URL` and the app's `EXPO_PUBLIC_API_URL`, and building a new APK. Do that after the new endpoint is reachable; using the new hostname for browser sign-in before this migration is not supported.
+After each website build, restore versioned APKs from `/vault/userdata/hark/builds/` to `apps/website/dist/client/downloads/`. The current download is `/downloads/hark-android-1.2.2.apk`.

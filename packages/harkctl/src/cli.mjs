@@ -5,7 +5,7 @@ import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { main as permissionsMain } from "./permissions/cli.mjs";
 
-const DEFAULT_API_URL = "https://sietch.sole-pierce.ts.net:8443";
+const DEFAULT_API_URL = "https://hark.sole-pierce.ts.net";
 const DEFAULT_SCOPES = [
   "notifications:send",
   "interactions:create",

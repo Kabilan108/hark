@@ -1,4 +1,4 @@
-export const SITE_URL = "https://sietch.sole-pierce.ts.net:8443";
+export const SITE_URL = "https://hark.sole-pierce.ts.net";
 
 export type SeoPage =
   | "home"
