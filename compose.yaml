@@ -3,26 +3,21 @@ services:
     build: .
     ports:
       # Bind publicly only behind a trusted proxy; auth rate limits use its client-IP headers.
-      - "8787:8787"
+      - "127.0.0.1:8787:8787"
     environment:
       NODE_ENV: production
       PORT: "8787"
+      HOST: "0.0.0.0"
+      SELF_HOSTED_MODE: "true"
+      FCM_PROJECT_ID: ${FCM_PROJECT_ID:?set FCM_PROJECT_ID in .env}
+      FCM_SERVICE_ACCOUNT_FILE: /run/secrets/fcm-service-account.json
       DATABASE_URL: /data/hark.sqlite
       # Public origin of this deployment (used for OAuth redirects + webhook URLs).
       APP_URL: ${APP_URL:-http://localhost:8787}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
-      APPLE_SIGN_IN_SERVICE_ID: ${APPLE_SIGN_IN_SERVICE_ID:-}
-      APPLE_SIGN_IN_BUNDLE_ID: ${APPLE_SIGN_IN_BUNDLE_ID:-ceo.ryan.hark}
-      APPLE_SIGN_IN_KEY_ID: ${APPLE_SIGN_IN_KEY_ID:-}
-      APPLE_SIGN_IN_PRIVATE_KEY: ${APPLE_SIGN_IN_PRIVATE_KEY:-}
-      EXPO_ACCESS_TOKEN: ${EXPO_ACCESS_TOKEN:-}
-      APNS_KEY_ID: ${APNS_KEY_ID:-}
-      APPLE_TEAM_ID: ${APPLE_TEAM_ID:-}
-      APNS_PRIVATE_KEY: ${APNS_PRIVATE_KEY:-}
-      APNS_BUNDLE_ID: ${APNS_BUNDLE_ID:-ceo.ryan.hark}
-      APNS_ENVIRONMENT: ${APNS_ENVIRONMENT:-sandbox}
+      OWNER_EMAIL: ${OWNER_EMAIL:?set OWNER_EMAIL in .env}
       AUTUMN_API_KEY: ${AUTUMN_API_KEY:-}
       # Only set this to a header the edge overwrites; see env.ts for why.
       TRUSTED_CLIENT_IP_HEADER: ${TRUSTED_CLIENT_IP_HEADER:-}
@@ -32,6 +27,7 @@ services:
       PRO_ACCOUNT_RATE_LIMIT_PER_MINUTE: ${PRO_ACCOUNT_RATE_LIMIT_PER_MINUTE:-1500}
     volumes:
       - hark-data:/data
+      - ${FCM_SERVICE_ACCOUNT_FILE:?set FCM_SERVICE_ACCOUNT_FILE in .env}:/run/secrets/fcm-service-account.json:ro
     restart: unless-stopped
 
 volumes:

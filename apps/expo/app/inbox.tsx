@@ -5,12 +5,10 @@ import type {
   InboxLiveActivityDto,
   InboxProjectSummaryDto,
 } from "@hark/contracts";
-import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import { Redirect, useFocusEffect, useRouter } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import { StatusBar } from "expo-status-bar";
-import { SymbolView } from "expo-symbols";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -18,7 +16,6 @@ import {
   AppState,
   Image,
   KeyboardAvoidingView,
-  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -38,6 +35,8 @@ import {
 } from "../src/lib/inbox-preview";
 import { createFocusRefreshPolicy, createRefreshSequence } from "../src/lib/inbox-refresh";
 import { DEVICE_ID_KEY, submitInteractionResponse } from "../src/lib/interactions";
+import { PREVIEW_MODE } from "../src/lib/preview";
+import { SymbolView } from "../src/lib/symbol-view";
 import { colors, fonts, tightTracking } from "../src/lib/theme";
 
 type ActivityFilter = "all" | InboxActivityKind;
@@ -70,7 +69,7 @@ export default function InboxScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState(false);
-  const simulatorPreview = __DEV__ && !Device.isDevice;
+  const simulatorPreview = PREVIEW_MODE;
   // Orders overlapping refreshes (timer, focus, push, pull-to-refresh) so a
   // slow stale response never overwrites fresher state or the badge.
   const refreshSequence = useRef(createRefreshSequence()).current;
@@ -79,7 +78,7 @@ export default function InboxScreen() {
     void SecureStore.getItemAsync(DEVICE_ID_KEY).then((value) =>
       setDeviceId(value ?? (simulatorPreview ? "preview-device" : "")),
     );
-  }, [simulatorPreview]);
+  }, []);
 
   const refreshSummary = useCallback(
     async (token: number) => {
@@ -119,7 +118,7 @@ export default function InboxScreen() {
         interactionResult.interactions.length + totalUnread,
       ).catch(() => {});
     },
-    [refreshSequence, simulatorPreview],
+    [refreshSequence],
   );
 
   const refreshActivity = useCallback(
@@ -148,7 +147,7 @@ export default function InboxScreen() {
       setActivityTotal(result.total);
       setLoadError(false);
     },
-    [activityFilter, activityPage, refreshSequence, simulatorPreview],
+    [activityFilter, activityPage, refreshSequence],
   );
 
   const refreshAll = useCallback(async () => {
@@ -163,18 +162,14 @@ export default function InboxScreen() {
       .catch(() => setLoadError(true))
       .finally(() => setLoading(false));
     const timer = setInterval(() => void refreshAll().catch(() => {}), 15_000);
-    const notificationSubscription = Notifications.addNotificationReceivedListener(() => {
-      void refreshAll().catch(() => {});
-    });
     const appStateSubscription = AppState.addEventListener("change", (state) => {
       if (state === "active") void refreshAll().catch(() => {});
     });
     return () => {
       clearInterval(timer);
-      notificationSubscription.remove();
       appStateSubscription.remove();
     };
-  }, [deviceId, refreshAll, session, simulatorPreview]);
+  }, [deviceId, refreshAll, session]);
 
   // Refresh immediately when the screen regains navigation focus — returning
   // from the project or notification screens, where read state changes —
@@ -190,7 +185,7 @@ export default function InboxScreen() {
   const focusReadyRef = useRef(false);
   useEffect(() => {
     focusReadyRef.current = Boolean((session || simulatorPreview) && deviceId);
-  }, [deviceId, session, simulatorPreview]);
+  }, [deviceId, session]);
   useFocusEffect(
     useCallback(() => {
       if (focusRefreshPolicy.onFocus(focusReadyRef.current)) {
@@ -262,10 +257,7 @@ export default function InboxScreen() {
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
       <StatusBar style="dark" />
-      <KeyboardAvoidingView
-        style={styles.container}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
+      <KeyboardAvoidingView style={styles.container}>
         <ScrollView
           ref={scrollRef}
           contentContainerStyle={styles.scroll}
@@ -479,7 +471,7 @@ function ActivityPicker({
   const options: Array<{ label: string; value: ActivityFilter }> = [
     { label: "All", value: "all" },
     { label: "Notifications", value: "notification" },
-    { label: "Live Activities", value: "live_activity" },
+    { label: "Live updates", value: "live_activity" },
     { label: "Responses", value: "response" },
   ];
   return (
@@ -1059,7 +1051,7 @@ function timeRemaining(value: string): string {
 }
 
 function activityKindLabel(kind: InboxActivityKind): string {
-  if (kind === "live_activity") return "Live Activity";
+  if (kind === "live_activity") return "Live update";
   if (kind === "response") return "Response";
   return "Notification";
 }

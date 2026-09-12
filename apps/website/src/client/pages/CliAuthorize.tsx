@@ -1,10 +1,9 @@
 import type { DeviceAuthorizationRequestDto } from "@hark/contracts";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import { AppleButton } from "../components/AppleButton";
 import { GoogleButton } from "../components/GoogleButton";
 import { api } from "../lib/api";
-import { signInWithApple, signInWithGoogle, useSession } from "../lib/auth";
+import { signInWithGoogle, useSession } from "../lib/auth";
 
 export function CliAuthorize() {
   const initialCode = new URLSearchParams(window.location.search).get("code") ?? "";
@@ -112,7 +111,6 @@ export function CliAuthorize() {
                 not authorize it.
               </p>
               <div className="flex flex-wrap gap-3">
-                <AppleButton onClick={() => void signInWithApple(callbackURL)} />
                 <GoogleButton onClick={() => void signInWithGoogle(callbackURL)} />
               </div>
             </div>

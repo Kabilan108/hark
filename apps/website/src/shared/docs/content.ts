@@ -19,7 +19,7 @@
 import type { DocItemId, DocSectionId } from "./nav";
 
 /** Placeholder webhook URL used throughout the docs samples. */
-export const EXAMPLE_ENDPOINT = "https://hark.ryan.ceo/hooks/whk_your_token";
+export const EXAMPLE_ENDPOINT = "https://sietch.sole-pierce.ts.net:8443/hooks/whk_your_token";
 
 export interface DocFieldRow {
   name: string;
@@ -82,25 +82,25 @@ export interface DocSection {
 }
 
 /** Page title, reused by the HTML `<h1>`, the prerendered `<title>`, and the markdown. */
-export const DOCS_TITLE = "Webhooks to iPhone notifications";
-export const DOCS_URL = "https://hark.ryan.ceo/docs";
-export const DOCS_MARKDOWN_URL = "https://hark.ryan.ceo/docs.md";
+export const DOCS_TITLE = "Webhooks to Android notifications";
+export const DOCS_URL = "https://sietch.sole-pierce.ts.net:8443/docs";
+export const DOCS_MARKDOWN_URL = "https://sietch.sole-pierce.ts.net:8443/docs.md";
 
 export const DOC_CONTENT: DocSection[] = [
   {
     id: "quickstart",
-    lead: "Hark turns an HTTP request into a source-branded iPhone notification. Create a service, then POST JSON to its secret webhook URL.",
+    lead: "Hark turns an HTTP request into an Android notification. Create a service, then POST JSON to its secret webhook URL.",
     subsections: [
       {
         id: "what-hark-is",
         blocks: [
           {
             kind: "p",
-            text: "Anything that can send an HTTP request can notify your phone: CI jobs, coding agents, cron scripts, monitors. Each service carries its own name, avatar, and tap destination, and Hark fills in any field you omit from those service defaults.",
+            text: "Anything that can send an HTTP request can notify your Android device: CI jobs, coding agents, cron scripts, and monitors. Each service has a title and optional tap destination, and Hark fills in fields omitted from a request using those service defaults.",
           },
           {
             kind: "p",
-            text: "There are two APIs, both authenticated by the same webhook token. The Notification API sends one-shot pushes and optional approval prompts. The Activity API drives a stateful Live Activity on the Lock Screen and in the Dynamic Island.",
+            text: "There are two APIs, both authenticated by the same webhook token. The Notification API sends one-shot pushes and optional response prompts. The Activity API drives a stateful ongoing progress notification and requests an Android Live Update when the device supports promotion and the user enables it.",
           },
         ],
       },
@@ -110,9 +110,9 @@ export const DOC_CONTENT: DocSection[] = [
           {
             kind: "steps",
             items: [
-              "Sign in at [hark.ryan.ceo](https://hark.ryan.ceo).",
-              "Register your iPhone with [Hark for iPhone](https://apps.apple.com/us/app/hark-developer-notifications/id6794121509).",
-              "Create a service in the dashboard and give it a title, avatar, and tap URL.",
+              "Sign in at your Hark deployment. The maintained instance is [sietch.sole-pierce.ts.net:8443](https://sietch.sole-pierce.ts.net:8443).",
+              "Build and install the Android app for your Hark deployment, then sign in with Google to register the device.",
+              "Create a service in the dashboard and give it a title and optional tap URL.",
               "Copy the secret webhook URL it returns.",
             ],
           },
@@ -168,7 +168,7 @@ export const DOC_CONTENT: DocSection[] = [
           },
           {
             kind: "p",
-            text: "`eventId` identifies the event in the dashboard activity log and, for interactive notifications, is the handle used to read or cancel the pending response. `delivered` is the number of push requests accepted by Expo.",
+            text: "`eventId` identifies the event in the dashboard activity log and, for interactive notifications, is the handle used to read or cancel the pending response. `accepted` is the number of requests accepted by FCM. The compatibility field `delivered` has the same value. Neither field proves that Android displayed the notification.",
           },
           {
             kind: "note",
@@ -180,7 +180,7 @@ export const DOC_CONTENT: DocSection[] = [
   },
   {
     id: "notification-api",
-    lead: "One-shot pushes, delivered to every registered iPhone or to the devices you name. The webhook token in the URL is the only credential.",
+    lead: "One-shot pushes are sent through FCM to every registered Android device or to the devices you name. The webhook token in the URL is the only credential.",
     subsections: [
       {
         id: "notification-endpoint",
@@ -237,23 +237,23 @@ export const DOC_CONTENT: DocSection[] = [
                 name: "imageUrl",
                 type: "string",
                 detail:
-                  "Public HTTPS avatar URL, up to 2,048 characters. localhost, .local, loopback, link-local and private IP ranges are rejected.",
+                  "Public HTTPS service image URL, up to 2,048 characters. Hark stores it as event metadata, but the current Android system notification does not display remote images. localhost, .local, loopback, link-local and private IP ranges are rejected.",
               },
               {
                 name: "url",
                 type: "string",
                 detail:
-                  "Web URL, universal link, app deep link, or Shortcuts URL opened when the notification is tapped. Up to 2,048 characters.",
+                  "Web URL or app deep link opened when the notification is tapped. Up to 2,048 characters.",
               },
               {
                 name: "deviceIds",
-                type: "string[], Pro",
+                type: "string[]",
                 detail:
                   "1 to 50 device IDs from the dashboard. Omit to notify every active device.",
               },
               {
                 name: "response",
-                type: "object, Pro",
+                type: "object",
                 detail: "Turns the notification into an approval, yes/no, or text prompt.",
               },
               {
@@ -300,7 +300,7 @@ export const DOC_CONTENT: DocSection[] = [
         blocks: [
           {
             kind: "p",
-            text: "Keep the `eventId` returned when you send a notification, then use it to request removal of that notification from the account's registered iPhones.",
+            text: "Keep the `eventId` returned when you send a notification, then use it to request removal of that notification from the account's registered Android devices.",
           },
           {
             kind: "code",
@@ -320,7 +320,7 @@ export const DOC_CONTENT: DocSection[] = [
           },
           {
             kind: "note",
-            text: "`accepted` means Expo accepted the silent removal command; it does not guarantee that iOS ran it. Background delivery is best effort and may be delayed or skipped, particularly after the user force-quits Hark. The same webhook token must own the event. Repeating a completed withdrawal is idempotent and does not send another command.",
+            text: "`accepted` means FCM accepted the data message. It does not guarantee that Android received or ran the removal command. Background delivery is best effort and may be delayed or skipped by connectivity, battery policy, device settings, or FCM. The same webhook token must own the event. Repeating a completed withdrawal is idempotent and does not send another command.",
           },
         ],
       },
@@ -334,7 +334,7 @@ export const DOC_CONTENT: DocSection[] = [
           {
             kind: "bullets",
             items: [
-              "Use an `https://` universal link when the destination app supports one. iOS opens the installed app and otherwise falls back to its website.",
+              "Use an `https://` app link when the destination app supports one. Android opens the associated app or the web page according to the device's link settings.",
               "Use the destination app's documented custom scheme for app-only routes, such as `your-app://incidents/INC-42`. If no installed app handles the scheme, Hark remains open.",
               "Percent-encode names, paths, and query values that contain spaces or reserved characters.",
             ],
@@ -348,20 +348,8 @@ export const DOC_CONTENT: DocSection[] = [
 }`,
           },
           {
-            kind: "p",
-            text: "To run a shortcut saved on the recipient's iPhone, use Apple's [Shortcuts URL scheme](https://support.apple.com/guide/shortcuts/run-a-shortcut-from-a-url-apd624386f42/ios). The shortcut name must match exactly. Set `input=text` and provide URL-encoded `text`, or set `input=clipboard` to pass the current clipboard.",
-          },
-          {
-            kind: "code",
-            language: "json",
-            code: `{
-  "body": "Production deployed. Tap to run the follow-up.",
-  "url": "shortcuts://run-shortcut?name=Deployment%20Follow-up&input=text&text=production%20deployed"
-}`,
-          },
-          {
             kind: "note",
-            text: "iOS may require the device to be unlocked, and the shortcut can still show its own permission or confirmation prompts. Hark cannot run a shortcut merely because a notification arrived. Unsafe local or executable schemes such as `javascript:`, `data:`, `file:`, `blob:`, and `about:` are rejected.",
+            text: "The destination opens only after a tap. If no installed app handles a custom scheme, Hark stays open. Unsafe local or executable schemes such as `javascript:`, `data:`, `file:`, `blob:`, and `about:` are rejected.",
           },
         ],
       },
@@ -385,27 +373,26 @@ export const DOC_CONTENT: DocSection[] = [
       },
       {
         id: "device-routing",
-        pro: true,
         blocks: [
           {
             kind: "p",
-            text: "By default a request fans out to every active iOS device on the account, most recently seen first. Free accounts are capped at one device, so extra phones are ignored until you upgrade.",
+            text: "By default a request fans out to every active Android device on the account, most recently seen first. Self-hosted deployments enable multi-device delivery.",
           },
           {
             kind: "p",
-            text: "Hark Pro can pass a non-empty `deviceIds` array to target specific iPhones. Copy the stable device IDs from the dashboard. IDs that do not belong to the account return `400 Invalid device selection`; owned but inactive or non-iOS devices in the list are skipped silently.",
+            text: "Pass a non-empty `deviceIds` array to target specific Android devices. Copy the stable device IDs from the dashboard. IDs that do not belong to the account return `400 Invalid device selection`; owned but inactive or non-Android devices in the list are skipped silently.",
           },
           {
             kind: "code",
             language: "json",
             code: `{
   "body": "The production deploy needs attention.",
-  "deviceIds": ["dev_your_iphone_id"]
+  "deviceIds": ["dev_your_android_id"]
 }`,
           },
           {
             kind: "p",
-            text: "Sending `deviceIds` without device routing on your plan returns `402`.",
+            text: "Self-hosted mode enables device routing for every account.",
           },
         ],
       },
@@ -413,19 +400,17 @@ export const DOC_CONTENT: DocSection[] = [
         id: "rate-limits",
         blocks: [
           {
-            kind: "table",
-            variant: "plan",
-            caption: "Plan limits",
-            rows: [
-              { limit: "Requests per minute, per service", free: "60", pro: "300" },
-              { limit: "Requests per minute, per account", free: "300", pro: "1,500" },
-              { limit: "Notifications per month", free: "10,000", pro: "100,000" },
-              { limit: "Active devices", free: "1", pro: "Unlimited" },
+            kind: "bullets",
+            items: [
+              "300 requests per minute per service by default.",
+              "1,500 requests per minute per account by default.",
+              "No Hark subscription quota on notifications.",
+              "No Hark plan limit on active devices.",
             ],
           },
           {
             kind: "p",
-            text: "The per-minute counters use a rolling 60-second window and are shared across notifications, interactive responses, and Live Activity operations. A limited request returns `429` with a `Retry-After: 60` header and `retryAfterSeconds` in the body. Exhausting the monthly allowance also returns `429`, without a retry hint.",
+            text: "The per-minute counters use a rolling 60-second window and are shared across notifications, interactive responses, and Activity API operations. A limited request returns `429` with a `Retry-After: 60` header and `retryAfterSeconds` in the body. Deployment operators can change the rate limits through server configuration.",
           },
         ],
       },
@@ -449,11 +434,10 @@ export const DOC_CONTENT: DocSection[] = [
               { name: "200", type: "ok", detail: "Accepted, or an idempotent replay." },
               { name: "202", type: "ok", detail: "An identical request is still processing." },
               { name: "400", type: "error", detail: "Invalid payload, key, or device selection." },
-              { name: "402", type: "error", detail: "The payload uses a Hark Pro feature." },
               { name: "404", type: "error", detail: "Unknown webhook token." },
               { name: "409", type: "error", detail: "Idempotency key reused with a new payload." },
-              { name: "429", type: "error", detail: "Rate limit or monthly allowance exhausted." },
-              { name: "502", type: "error", detail: "Every push target was rejected by Expo." },
+              { name: "429", type: "error", detail: "A configured rate limit was exhausted." },
+              { name: "502", type: "error", detail: "Every push target was rejected by FCM." },
             ],
           },
           {
@@ -464,11 +448,10 @@ export const DOC_CONTENT: DocSection[] = [
       },
       {
         id: "interactive-responses",
-        pro: true,
         blocks: [
           {
             kind: "p",
-            text: "Hark Pro can attach a fixed response type to any notification. Supported types are `approval` (Approve or Deny), `yes_no` (Yes or No), and `text` (a short free-form reply).",
+            text: "Attach a fixed response type to any notification. Supported types are `approval` (Approve or Deny), `yes_no` (Yes or No), and `text` (a short free-form reply).",
           },
           {
             kind: "code",
@@ -537,7 +520,6 @@ export const DOC_CONTENT: DocSection[] = [
       },
       {
         id: "response-status",
-        pro: true,
         blocks: [
           {
             kind: "p",
@@ -581,7 +563,6 @@ curl -X POST ${EXAMPLE_ENDPOINT}/events/evt_Cxns2IdbF4H0TJYq/cancel`,
       },
       {
         id: "response-callbacks",
-        pro: true,
         blocks: [
           {
             kind: "p",
@@ -619,8 +600,7 @@ curl -X POST ${EXAMPLE_ENDPOINT}/events/evt_Cxns2IdbF4H0TJYq/cancel`,
   },
   {
     id: "activity-api",
-    pro: true,
-    lead: "A Live Activity is a stateful card on the Lock Screen and in the Dynamic Island. Start one, push partial updates as work progresses, then end it. Same webhook token, nested routes.",
+    lead: "A Hark activity is a stateful ongoing progress notification on Android. Start one, push partial updates as work progresses, then end it. The same webhook token authenticates its nested routes.",
     subsections: [
       {
         id: "activity-start",
@@ -689,7 +669,7 @@ curl -X POST ${EXAMPLE_ENDPOINT}/events/evt_Cxns2IdbF4H0TJYq/cancel`,
           },
           {
             kind: "note",
-            text: "Live Activities need a device running a Hark build that has registered a push-to-start token. If no device qualifies, the start still returns `201` with `accepted: 0` and an explanatory `message`.",
+            text: "Activities need an Android device running a compatible Hark build with notification permission. If no device qualifies, the start still returns `201` with `accepted: 0` and an explanatory `message`.",
           },
         ],
       },
@@ -712,7 +692,7 @@ curl -X POST ${EXAMPLE_ENDPOINT}/events/evt_Cxns2IdbF4H0TJYq/cancel`,
             items: [
               "Pass `null` for `detail` or `progress` to clear the field.",
               "Pass `ifSequence` to make the write conditional. A mismatch returns `409 Sequence conflict` along with the current state so you can reconcile.",
-              "Updating an activity that has already ended or expired returns `409 Live Activity is already terminal`.",
+              "Updating an activity that has already ended or expired returns `409 Live Activity is already terminal`. The error text keeps the stable API name.",
             ],
           },
         ],
@@ -729,7 +709,7 @@ curl -X POST ${EXAMPLE_ENDPOINT}/events/evt_Cxns2IdbF4H0TJYq/cancel`,
           },
           {
             kind: "p",
-            text: "The body is optional. `dismissAfterSeconds` (0 to 14,400, default 0) controls how long the finished card lingers on the Lock Screen before iOS removes it.",
+            text: "The body is optional. `dismissAfterSeconds` (0 to 14,400, default 0) controls how long the finished Android notification remains before Hark removes it.",
           },
           {
             kind: "note",
@@ -743,7 +723,7 @@ curl -X POST ${EXAMPLE_ENDPOINT}/events/evt_Cxns2IdbF4H0TJYq/cancel`,
           {
             kind: "table",
             variant: "field",
-            caption: "Live Activity fields",
+            caption: "Activity API fields",
             rows: [
               {
                 name: "title",
@@ -768,7 +748,7 @@ curl -X POST ${EXAMPLE_ENDPOINT}/events/evt_Cxns2IdbF4H0TJYq/cancel`,
                 name: "style",
                 type: "enum",
                 detail:
-                  "`standard`, `ring`, `hero`, `terminal`, or `steps`. Defaults to `standard` and selects the widget layout. Updates can switch it mid-flight. App builds that predate a style fall back to the standard layout.",
+                  "Compatibility field: `standard`, `ring`, `hero`, `terminal`, or `steps`. The current Android renderer uses the system progress-notification layout for every value.",
               },
               {
                 name: "privacyMode",
@@ -786,68 +766,18 @@ curl -X POST ${EXAMPLE_ENDPOINT}/events/evt_Cxns2IdbF4H0TJYq/cancel`,
                 name: "replace",
                 type: "boolean, start only",
                 detail:
-                  "End any Live Activity occupying a target device, and any of your own still holding the same `key`, before starting. Defaults to `false`. The response reports the displaced count as `replaced`.",
+                  "End any activity occupying a target device, and any of your own still holding the same `key`, before starting. Defaults to `false`. The response reports the displaced count as `replaced`.",
               },
               {
                 name: "deviceIds",
-                type: "string[], Pro",
+                type: "string[]",
                 detail: "1 to 50 device IDs. Omit to target every capable device.",
               },
             ],
           },
           {
             kind: "p",
-            text: "The five progress layouts and four interactive approval layouts, captured from the iOS simulator with the same state:",
-          },
-          {
-            kind: "stylePreviews",
-            styles: [
-              {
-                name: "standard",
-                description:
-                  "Icon, title over status, trailing percent, linear progress bar. The default.",
-              },
-              {
-                name: "ring",
-                description:
-                  "A determinate capacity gauge with the percent centered; no linear bar.",
-              },
-              {
-                name: "hero",
-                description:
-                  "Status becomes the headline and the bar runs edge to edge along the bottom of the card.",
-                nativeScreenshot: false,
-              },
-              {
-                name: "terminal",
-                description:
-                  "Monospaced prompt treatment: the status lowercased behind a prompt glyph, the detail as a comment line.",
-              },
-              {
-                name: "steps",
-                description: "Progress quantized into five stage pips — phases, not percent.",
-              },
-              {
-                name: "approval",
-                description:
-                  "The default interactive layout with a clear prompt and balanced approve/deny actions.",
-              },
-              {
-                name: "shell",
-                description:
-                  "A terminal-native approval prompt with command-line copy and compact green actions.",
-              },
-              {
-                name: "verdict",
-                description:
-                  "A centered system-dialog treatment with a divider and high-contrast blue primary action.",
-              },
-              {
-                name: "signal",
-                description:
-                  "A guarded-action card with restrained security framing and green/red decisions.",
-              },
-            ],
+            text: "Android renders the title, status, optional detail, progress, and actions with the system notification UI. It does not render the custom `style` layouts or remote service image in the notification.",
           },
         ],
       },
@@ -860,7 +790,7 @@ curl -X POST ${EXAMPLE_ENDPOINT}/events/evt_Cxns2IdbF4H0TJYq/cancel`,
           },
           {
             kind: "p",
-            text: "`staleAfterSeconds` accepts 0 to 28,800 and defaults to 14,400 — four hours. Past that deadline iOS treats the content as possibly out of date, but the card stays visible and updateable. Every update rolls the deadline forward from now, clamped to the expiry. An update that omits `staleAfterSeconds` reuses the previous window.",
+            text: "`staleAfterSeconds` accepts 0 to 28,800 and defaults to 14,400, or four hours. Hark keeps the value for API compatibility. Android continues to show and update the ongoing notification until the activity expires, ends, or the user unpins it. Every update rolls the deadline forward from now, clamped to the expiry.",
           },
         ],
       },
@@ -869,7 +799,7 @@ curl -X POST ${EXAMPLE_ENDPOINT}/events/evt_Cxns2IdbF4H0TJYq/cancel`,
         blocks: [
           {
             kind: "p",
-            text: "A device can host one Hark Live Activity at a time. Starting another while one is still live on a target device returns `409`:",
+            text: "A device can host one active Hark progress update at a time. Starting another while one is active on a target device returns `409`:",
           },
           {
             kind: "code",
@@ -900,15 +830,15 @@ curl -X POST ${EXAMPLE_ENDPOINT}/events/evt_Cxns2IdbF4H0TJYq/cancel`,
         blocks: [
           {
             kind: "p",
-            text: "A start carries an alert, so it may notify the user like a normal notification. Updates and ends carry no alert and are silent. Hark sends every Live Activity push at high APNs priority, which affects delivery speed only, not sound or haptics.",
+            text: "Hark sends activity starts, updates, and ends as data-only FCM messages. The Android renderer keeps activity notifications silent and only alerts once. FCM acceptance is not proof of device delivery, and Android may delay messages because of connectivity, battery policy, or device settings.",
           },
           {
             kind: "p",
-            text: "Live Activity operations count against the same per-minute and monthly limits as notifications, so a chatty progress loop consumes the same budget. Throttle to meaningful state changes.",
+            text: "Activity operations share the same per-minute limits as notifications. Throttle to meaningful state changes.",
           },
           {
             kind: "note",
-            text: "iOS also budgets push-to-start deliveries per app. Rapid successive starts to the same device can be silently suppressed: the start still reports `accepted`, but the device never registers an update token, so every later update and end fails with `MissingUpdateToken`. Space fresh starts out by a minute or so — or keep one activity alive and update it, which is cheaper and never hits the budget.",
+            text: "Hark always falls back to an ongoing progress notification. On Android 16 and newer, it also requests promoted Live Update treatment when the device supports promotion, the system setting allows it, and watched activities are enabled in Hark. Promotion is controlled by Android and is not guaranteed.",
           },
         ],
       },
@@ -916,24 +846,25 @@ curl -X POST ${EXAMPLE_ENDPOINT}/events/evt_Cxns2IdbF4H0TJYq/cancel`,
   },
   {
     id: "cli",
-    lead: "`harkctl` wraps the agent API for terminals, scripts, and coding agents: one-shot notifications, questions with answers you can wait on, and Live Activities — no webhook URL required. It needs Node.js 22 or newer.",
+    lead: "`harkctl` wraps the agent API for terminals, scripts, and coding agents: one-shot notifications, questions with answers you can wait on, and Activity API updates. It needs Node.js 22 or newer.",
     subsections: [
       {
         id: "cli-install",
         blocks: [
           {
             kind: "p",
-            text: "Run it straight from npm with `npx harkctl`, or install it globally with `npm install -g harkctl`. Signing in uses a browser device-authorization flow — no tokens on the command line, ever.",
+            text: "Run the CLI from this fork so its defaults match the Android backend. Set `HARK_API_URL` when your deployment uses a different origin. Signing in uses a browser device-authorization flow, so no token appears on the command line.",
           },
           {
             kind: "code",
             language: "bash",
-            code: "npx harkctl auth login",
+            code: `HARK_API_URL=https://sietch.sole-pierce.ts.net:8443 \\
+  node packages/harkctl/bin/harkctl.mjs auth login`,
           },
           {
             kind: "steps",
             items: [
-              "The CLI prints a short code and opens [hark.ryan.ceo](https://hark.ryan.ceo) in your browser.",
+              "The CLI prints a short code and opens the configured Hark server in your browser.",
               "Sign in and approve the requested scopes; every scope is shown before you approve.",
               "Credentials are written to an OS config file with mode `0600`, and the CLI polls until the approval lands.",
             ],
@@ -944,7 +875,7 @@ curl -X POST ${EXAMPLE_ENDPOINT}/events/evt_Cxns2IdbF4H0TJYq/cancel`,
           },
           {
             kind: "p",
-            text: "Use repeatable `--scope` flags to narrow access, `--client-name` to label the connection, and `--expires-in` (default `90d`) to bound its lifetime. For CI or self-hosted setups, `HARK_TOKEN` and `HARK_API_URL` environment variables override the config file.",
+            text: "Use repeatable `--scope` flags to narrow access, `--client-name` to label the connection, and `--expires-in` (default `90d`) to bound its lifetime. `HARK_TOKEN` and `HARK_API_URL` override the config file. Permission-hook subprocesses preserve `HARK_API_URL`, so agent approvals stay on the same self-hosted server.",
           },
         ],
       },
@@ -999,7 +930,7 @@ harkctl permissions doctor`,
     "title": "Release bot",
     "imageUrl": "https://example.com/bot.png"
   },
-  "webhookUrl": "https://hark.ryan.ceo/hooks/hook_..."
+  "webhookUrl": "https://sietch.sole-pierce.ts.net:8443/hooks/hook_..."
 }`,
           },
           {
@@ -1017,7 +948,7 @@ harkctl permissions doctor`,
         blocks: [
           {
             kind: "p",
-            text: "`harkctl notify <body>` sends a one-shot push to every active iPhone on your account. Appearance is per call — the title acts as the sender name, and messages with the same title thread together like a service.",
+            text: "`harkctl notify <body>` sends a one-shot push to every active Android device on your account. The title becomes the Android notification title. The current native renderer does not group messages into service threads.",
           },
           {
             kind: "code",
@@ -1036,17 +967,18 @@ harkctl permissions doctor`,
               {
                 name: "--image",
                 type: "url",
-                detail: "Public HTTPS avatar, same rules as the webhook `imageUrl`.",
+                detail:
+                  "Public HTTPS service image URL, stored as metadata but not displayed in the Android system notification.",
               },
               {
                 name: "--url",
                 type: "url",
-                detail: "Web URL, app deep link, or Shortcuts URL opened when tapped.",
+                detail: "Web URL or app deep link opened when tapped.",
               },
               {
                 name: "--device",
                 type: "id, repeatable",
-                detail: "Target specific iPhones. Requires Hark Pro.",
+                detail: "Target specific Android devices.",
               },
               {
                 name: "--project",
@@ -1079,7 +1011,7 @@ harkctl permissions doctor`,
           },
           {
             kind: "note",
-            text: "Sends from one connection share the webhook per-minute budgets — the requester counts like a service, the account window spans everything — and the same monthly notification allowance.",
+            text: "Sends from one connection share the configured per-minute budgets. The requester counts like a service, and the account window spans every sender.",
           },
         ],
       },
@@ -1098,7 +1030,7 @@ harkctl permissions doctor`,
           },
           {
             kind: "p",
-            text: "Add `--live-activity` to an approval or yes/no request to put its buttons on the Lock Screen and expanded Dynamic Island. `--style` selects `approval`, `shell`, `verdict`, or `signal`. `--primary-label` and `--secondary-label` customize visible verbs such as Send/Deny or Push/Cancel while the returned action remains canonical. Interactive Live Activity prompts are limited to 240 characters, action labels are 1 to 24 characters, requests require iOS 17+, expire within eight hours, and don't support text replies, images, or URLs.",
+            text: "Add `--live-activity` to an approval or yes/no request to attach actions to an ongoing Android progress notification. `--primary-label` and `--secondary-label` customize visible verbs such as Send/Deny or Push/Cancel while the returned action remains canonical. The stable `--style` field is accepted for API compatibility, but Android uses its system notification layout. Interactive activity prompts are limited to 240 characters, action labels are 1 to 24 characters, expire within eight hours, and do not support text replies, images, or URLs.",
           },
           {
             kind: "code",

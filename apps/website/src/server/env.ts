@@ -4,6 +4,7 @@ const DEV_SECRET = "hark-insecure-dev-secret-change-me";
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  HOST: z.string().trim().min(1).default("127.0.0.1"),
   PORT: z.coerce.number().int().positive().default(8787),
   /** SQLite file path. Production containers should point this at /data/hark.sqlite. */
   DATABASE_URL: z.string().min(1).default("./data/hark.sqlite"),
@@ -12,15 +13,23 @@ const envSchema = z.object({
   BETTER_AUTH_SECRET: z.string().min(16).default(DEV_SECRET),
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
-  /** Sign in with Apple Services ID used by the web OAuth flow. */
+  /** The only Google identity allowed to create a session on this private fork. */
+  OWNER_EMAIL: z.email().trim().toLowerCase().optional(),
+  /** Compatibility values for retained historical Apple modules, which are not mounted. */
   APPLE_SIGN_IN_SERVICE_ID: z.string().optional(),
-  /** Native App ID / bundle identifier. This is also the native token audience. */
   APPLE_SIGN_IN_BUNDLE_ID: z.string().min(1).default("ceo.ryan.hark"),
   APPLE_SIGN_IN_KEY_ID: z.string().optional(),
-  /** Sign in with Apple .p8 key. Accepts PEM text (with \n) or base64-encoded PEM. */
   APPLE_SIGN_IN_PRIVATE_KEY: z.string().optional(),
   /** Optional. Enables authenticated requests to the Expo Push Service. */
   EXPO_ACCESS_TOKEN: z.string().optional(),
+  /** Firebase project and server-only service-account file used for direct FCM HTTP v1. */
+  FCM_PROJECT_ID: z.string().trim().min(1).optional(),
+  FCM_SERVICE_ACCOUNT_FILE: z.string().trim().min(1).optional(),
+  /** Enables the full feature set without a hosted billing provider. */
+  SELF_HOSTED_MODE: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
   /** Optional direct APNs credentials for Live Activity start/update/end delivery. */
   APNS_KEY_ID: z.string().optional(),
   APPLE_TEAM_ID: z.string().optional(),
@@ -59,33 +68,27 @@ export function assertRuntimeEnv(): void {
       "GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are not set — Google sign-in will fail until configured.",
     );
   }
-  if (
-    !env.APPLE_SIGN_IN_SERVICE_ID ||
-    !env.APPLE_TEAM_ID ||
-    !env.APPLE_SIGN_IN_KEY_ID ||
-    !env.APPLE_SIGN_IN_PRIVATE_KEY
-  ) {
-    problems.push(
-      "APPLE_SIGN_IN_SERVICE_ID / APPLE_SIGN_IN_BUNDLE_ID / APPLE_TEAM_ID / APPLE_SIGN_IN_KEY_ID / APPLE_SIGN_IN_PRIVATE_KEY are not all set — Sign in with Apple will fail until configured.",
-    );
-  }
   if (env.BETTER_AUTH_SECRET === DEV_SECRET) {
     problems.push("BETTER_AUTH_SECRET is using the insecure development default.");
   }
-  if (!env.EXPO_ACCESS_TOKEN) {
-    problems.push("EXPO_ACCESS_TOKEN is not set — push requests to Expo will be unauthenticated.");
+  if (!env.OWNER_EMAIL) {
+    problems.push("OWNER_EMAIL is not set; Google sign-in has no allowed account.");
   }
-  if (!env.APNS_KEY_ID || !env.APPLE_TEAM_ID || !env.APNS_PRIVATE_KEY) {
+  if (!env.FCM_PROJECT_ID || !env.FCM_SERVICE_ACCOUNT_FILE) {
     problems.push(
-      "APNS_KEY_ID / APPLE_TEAM_ID / APNS_PRIVATE_KEY are not all set — Live Activity delivery will be unavailable.",
+      "FCM_PROJECT_ID / FCM_SERVICE_ACCOUNT_FILE are not set; Android push delivery will be unavailable.",
     );
   }
-  if (!env.AUTUMN_API_KEY) {
+  if (!env.AUTUMN_API_KEY && !env.SELF_HOSTED_MODE) {
     problems.push("AUTUMN_API_KEY is not set — paid plans and checkout will be unavailable.");
   }
 
   if (env.NODE_ENV === "production" && env.BETTER_AUTH_SECRET === DEV_SECRET) {
     console.error("Refusing to start in production with the default BETTER_AUTH_SECRET.");
+    process.exit(1);
+  }
+  if (env.NODE_ENV === "production" && !env.OWNER_EMAIL) {
+    console.error("Refusing to start in production without OWNER_EMAIL.");
     process.exit(1);
   }
 

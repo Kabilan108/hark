@@ -11,11 +11,8 @@ import type {
   InboxNotificationDetailDto,
   InboxNotificationPageDto,
   InboxProjectsDto,
-  InteractionCredentialResponseInput,
   InteractionDto,
   InteractionResponseInput,
-  LiveActivityPushToStartTokenInput,
-  LiveActivityUpdateTokenInput,
 } from "@hark/contracts";
 import { apiErrorFromBody } from "./api-error";
 import { API_URL, getCookie } from "./auth";
@@ -52,16 +49,14 @@ export const api = {
       method: "DELETE",
       body: JSON.stringify(input),
     }),
-  registerLiveActivityPushToStartToken: (input: LiveActivityPushToStartTokenInput) =>
-    request<{ deviceId: string; updatedAt?: string }>("/api/devices/live-activity/push-to-start", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
-  registerLiveActivityUpdateToken: (input: LiveActivityUpdateTokenInput) =>
-    request<{ activityId: string; deviceId: string }>("/api/devices/live-activity/update-token", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
+  markDeviceReady: (deviceId: string) =>
+    request<{ ok: true; accepted: number; idempotent?: true }>(
+      `/api/devices/${encodeURIComponent(deviceId)}/ready`,
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      },
+    ),
   listEvents: (limit = 20) => request<{ events: EventDto[] }>(`/api/events?limit=${limit}`),
   listPendingInteractions: () =>
     request<{ interactions: InboxInteractionDto[] }>("/api/interactions"),
@@ -70,11 +65,6 @@ export const api = {
     request<InboxActivityPageDto>(`/api/activity-feed?filter=${filter}&page=${page}`),
   respondToInteraction: (id: string, input: InteractionResponseInput) =>
     request<{ interaction: InteractionDto }>(`/api/interactions/${id}/respond`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
-  respondToInteractionWithToken: (id: string, input: InteractionCredentialResponseInput) =>
-    request<{ ok: true; status: string }>(`/api/interaction-responses/${id}/respond`, {
       method: "POST",
       body: JSON.stringify(input),
     }),

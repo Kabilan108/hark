@@ -1,6 +1,3 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { LIVE_ACTIVITY_STYLES } from "@hark/contracts";
 import { describe, expect, it } from "vitest";
 import { DOC_CONTENT } from "./content";
 import { parseInline } from "./inline";
@@ -78,26 +75,12 @@ describe("docs content", () => {
     }
   });
 
-  it("has a native screenshot for every Live Activity preview", () => {
-    const styles = DOC_CONTENT.flatMap((section) =>
-      section.subsections.flatMap((subsection) =>
-        subsection.blocks.flatMap((block) =>
-          block.kind === "stylePreviews" ? block.styles.map((style) => style.name) : [],
-        ),
-      ),
-    );
-    expect(styles).toEqual([...LIVE_ACTIVITY_STYLES]);
-    for (const style of DOC_CONTENT.flatMap((section) =>
-      section.subsections.flatMap((subsection) =>
-        subsection.blocks.flatMap((block) => (block.kind === "stylePreviews" ? block.styles : [])),
-      ),
-    )) {
-      if (style.nativeScreenshot === false) continue;
-      expect(
-        existsSync(join(process.cwd(), "public", "live-activities", `${style.name}.webp`)),
-        style.name,
-      ).toBe(true);
-    }
+  it("describes Android FCM delivery without Apple transport guidance", () => {
+    const markdown = docsMarkdown();
+    expect(markdown).toContain("data-only FCM messages");
+    expect(markdown).toContain("ongoing progress notification");
+    expect(markdown).not.toContain("apps.apple.com");
+    expect(markdown).not.toContain("APNs");
   });
 });
 
@@ -108,9 +91,9 @@ describe("parseInline", () => {
       { kind: "code", text: "body" },
       { kind: "text", text: " is required." },
     ]);
-    expect(parseInline("Sign in at [hark.ryan.ceo](https://hark.ryan.ceo).")).toEqual([
+    expect(parseInline("Sign in at [Hark](https://sietch.sole-pierce.ts.net:8443).")).toEqual([
       { kind: "text", text: "Sign in at " },
-      { kind: "link", text: "hark.ryan.ceo", href: "https://hark.ryan.ceo" },
+      { kind: "link", text: "Hark", href: "https://sietch.sole-pierce.ts.net:8443" },
       { kind: "text", text: "." },
     ]);
   });
@@ -131,11 +114,12 @@ describe("docsMarkdown", () => {
   });
 
   it("emits fenced code with a language and pipe tables", () => {
-    expect(markdown).toContain("```bash\ncurl -X POST https://hark.ryan.ceo/hooks/whk_your_token");
+    expect(markdown).toContain(
+      "```bash\ncurl -X POST https://sietch.sole-pierce.ts.net:8443/hooks/whk_your_token",
+    );
     expect(markdown).toContain('```json\n{\n  "ok": true,');
     expect(markdown).toContain("| Field | Type | Description |");
     expect(markdown).toContain("| Route | Purpose |");
-    expect(markdown).toContain("| Limit | Free | Pro |");
   });
 
   it("keeps table cells on one line", () => {
@@ -152,17 +136,16 @@ describe("docsMarkdown", () => {
   --wait --timeout 15m`);
   });
 
-  it("documents app deep links and Shortcuts tap destinations", () => {
-    expect(markdown).toContain("### Deep links and Shortcuts");
+  it("documents Android tap destinations", () => {
+    expect(markdown).toContain("### Tap destinations");
     expect(markdown).toContain('"url": "your-app://incidents/INC-42"');
-    expect(markdown).toContain(
-      "shortcuts://run-shortcut?name=Deployment%20Follow-up&input=text&text=production%20deployed",
-    );
-    expect(markdown).toContain("Hark cannot run a shortcut merely because a notification arrived");
+    expect(markdown).toContain("The destination opens only after a tap");
+    expect(markdown).not.toContain("shortcuts://");
   });
 
-  it("flags Hark Pro sections", () => {
-    expect(markdown).toContain("**Hark Pro**");
+  it("documents self-hosted feature access", () => {
+    expect(markdown).toContain("Self-hosted mode enables device routing for every account");
+    expect(markdown).not.toContain("requires a paid plan");
   });
 });
 
@@ -170,12 +153,12 @@ describe("llmsTxt", () => {
   it("describes Hark and links its canonical machine-readable resources", () => {
     const text = llmsTxt();
     expect(text.startsWith("# Hark")).toBe(true);
-    expect(text).toContain("https://hark.ryan.ceo/docs");
-    expect(text).toContain("https://hark.ryan.ceo/docs.md");
-    expect(text).toContain("https://hark.ryan.ceo/agents.md");
-    expect(text).toContain("https://hark.ryan.ceo/docs#cli-permissions");
-    expect(text).toContain("https://hark.ryan.ceo/pricing");
-    expect(text).toContain("https://skills.sh/r44vc0rp/hark/hark");
-    expect(text).toContain("https://www.npmjs.com/package/harkctl");
+    expect(text).toContain("https://sietch.sole-pierce.ts.net:8443/docs");
+    expect(text).toContain("https://sietch.sole-pierce.ts.net:8443/docs.md");
+    expect(text).toContain("https://sietch.sole-pierce.ts.net:8443/agents.md");
+    expect(text).toContain("https://sietch.sole-pierce.ts.net:8443/docs#cli-permissions");
+    expect(text).toContain("https://sietch.sole-pierce.ts.net:8443/pricing");
+    expect(text).toContain("node packages/harkctl/bin/harkctl.mjs");
+    expect(text).toContain("HARK_API_URL");
   });
 });

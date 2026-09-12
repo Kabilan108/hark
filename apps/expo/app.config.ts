@@ -1,117 +1,62 @@
 import type { ConfigContext, ExpoConfig } from "expo/config";
 
+function requireApiUrl(): string {
+  const configured = process.env.EXPO_PUBLIC_API_URL;
+  if (!configured) {
+    throw new Error("EXPO_PUBLIC_API_URL must be set when configuring the Android app");
+  }
+  const parsed = new URL(configured);
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.pathname !== "/" ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    throw new Error("EXPO_PUBLIC_API_URL must be an HTTPS origin without credentials or a path");
+  }
+  return parsed.origin;
+}
+
+const apiUrl = requireApiUrl();
+const googleServicesFile = process.env.GOOGLE_SERVICES_JSON;
+if (!googleServicesFile && process.env.EXPO_PUBLIC_PREVIEW_MODE !== "1") {
+  throw new Error(
+    "GOOGLE_SERVICES_JSON must point to the Firebase Android client config for a normal build",
+  );
+}
+
+const android: ExpoConfig["android"] = {
+  package: "dev.kabilan.hark",
+  versionCode: 1,
+  icon: "./assets/icon.png",
+  adaptiveIcon: {
+    foregroundImage: "./assets/icon.png",
+    backgroundColor: "#035B49",
+  },
+  permissions: ["POST_NOTIFICATIONS", "android.permission.POST_PROMOTED_NOTIFICATIONS"],
+  ...(googleServicesFile ? { googleServicesFile } : {}),
+};
+
 export default ({ config: _config }: ConfigContext): ExpoConfig => ({
   name: "Hark",
-  slug: "hark",
-  version: "1.2",
+  slug: "hark-android",
+  version: "1.2.0",
   icon: "./assets/icon.png",
-  scheme: "hark",
+  scheme: "hark-android",
   orientation: "portrait",
   userInterfaceStyle: "light",
-  platforms: ["ios"],
-  ios: {
-    bundleIdentifier: "ceo.ryan.hark",
-    usesAppleSignIn: true,
-    icon: "./assets/icon.png",
-    supportsTablet: false,
-    // Communication Notifications + SiriKit. `aps-environment` is managed by
-    // EAS capability sync but included so bare prebuilds get push entitlements.
-    entitlements: {
-      "aps-environment": "development",
-      "com.apple.developer.usernotifications.communication": true,
-      "com.apple.developer.siri": true,
-    },
-    infoPlist: {
-      ITSAppUsesNonExemptEncryption: false,
-      NSUserActivityTypes: ["INSendMessageIntent"],
-    },
-  },
+  platforms: ["android"],
+  android,
   plugins: [
-    "./plugins/with-ios-scene-delegate",
     "expo-router",
-    "expo-apple-authentication",
     "expo-secure-store",
-    [
-      "expo-alternate-app-icons",
-      [
-        {
-          name: "Teal",
-          ios: "./assets/app-icons/teal.png",
-          android: {
-            foregroundImage: "./assets/app-icons/teal.png",
-            backgroundColor: "#09606B",
-          },
-        },
-        {
-          name: "Blue",
-          ios: "./assets/app-icons/blue.png",
-          android: {
-            foregroundImage: "./assets/app-icons/blue.png",
-            backgroundColor: "#245493",
-          },
-        },
-        {
-          name: "Indigo",
-          ios: "./assets/app-icons/indigo.png",
-          android: {
-            foregroundImage: "./assets/app-icons/indigo.png",
-            backgroundColor: "#414781",
-          },
-        },
-        {
-          name: "Violet",
-          ios: "./assets/app-icons/violet.png",
-          android: {
-            foregroundImage: "./assets/app-icons/violet.png",
-            backgroundColor: "#66437D",
-          },
-        },
-        {
-          name: "Rose",
-          ios: "./assets/app-icons/rose.png",
-          android: {
-            foregroundImage: "./assets/app-icons/rose.png",
-            backgroundColor: "#84465F",
-          },
-        },
-        {
-          name: "Red",
-          ios: "./assets/app-icons/red.png",
-          android: {
-            foregroundImage: "./assets/app-icons/red.png",
-            backgroundColor: "#8D403D",
-          },
-        },
-        {
-          name: "Orange",
-          ios: "./assets/app-icons/orange.png",
-          android: {
-            foregroundImage: "./assets/app-icons/orange.png",
-            backgroundColor: "#925134",
-          },
-        },
-        {
-          name: "Gold",
-          ios: "./assets/app-icons/gold.png",
-          android: {
-            foregroundImage: "./assets/app-icons/gold.png",
-            backgroundColor: "#80651F",
-          },
-        },
-        {
-          name: "Black",
-          ios: "./assets/app-icons/black.png",
-          android: {
-            foregroundImage: "./assets/app-icons/black.png",
-            backgroundColor: "#292D2C",
-          },
-        },
-      ],
-    ],
     [
       "expo-notifications",
       {
-        enableBackgroundRemoteNotifications: true,
+        defaultChannel: "hark-events",
+        sounds: [],
       },
     ],
     "expo-web-browser",
@@ -119,35 +64,23 @@ export default ({ config: _config }: ConfigContext): ExpoConfig => ({
       "expo-splash-screen",
       {
         backgroundColor: "#035B49",
+        image: "./assets/icon.png",
+        imageWidth: 96,
       },
     ],
     [
       "expo-build-properties",
       {
-        ios: {
-          deploymentTarget: "16.4",
+        android: {
+          compileSdkVersion: 37,
+          targetSdkVersion: 37,
+          minSdkVersion: 26,
         },
       },
     ],
-    [
-      "expo-widgets",
-      {
-        bundleIdentifier: "ceo.ryan.hark.widgets",
-        groupIdentifier: "group.ceo.ryan.hark",
-        enablePushNotifications: true,
-        frequentUpdates: true,
-      },
-    ],
-    [
-      "@bacons/apple-targets",
-      {
-        appleTeamId: process.env.APPLE_TEAM_ID ?? "9G68SMNHEU",
-      },
-    ],
+    "./plugins/with-hark-android",
   ],
   extra: {
-    eas: {
-      projectId: process.env.EAS_PROJECT_ID ?? "0fce08a7-f312-4b58-a907-85a648113946",
-    },
+    apiUrl,
   },
 });

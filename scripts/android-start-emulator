@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+avd_name="${HARK_ANDROID_AVD:-hark-pixel9-api37}"
+
+: "${ANDROID_AVD_HOME:?Run this command through the project dev shell}"
+
+while read -r serial state; do
+  [[ "$serial" == emulator-* && "$state" == device ]] || continue
+  read -r running_avd < <(adb -s "$serial" emu avd name 2>/dev/null || true)
+  running_avd="${running_avd%$'\r'}"
+  if [[ "$running_avd" == "$avd_name" ]]; then
+    printf 'AVD %s is already running as %s\n' "$avd_name" "$serial"
+    exit 0
+  fi
+done < <(adb devices | awk 'NR > 1 && NF >= 2 { print $1, $2 }')
+
+# Google's emulator bundle ships XCB but not a Wayland Qt platform plugin.
+export QT_QPA_PLATFORM=xcb
+
+exec emulator "@$avd_name" \
+  -gpu auto \
+  -no-snapshot-save \
+  "$@"

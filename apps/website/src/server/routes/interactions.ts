@@ -12,7 +12,7 @@ import {
   liveActivityInteractionResponseSchema,
   serviceCreateSchema,
 } from "@hark/contracts";
-import { and, count, desc, eq, gt, gte, inArray, isNull, lte } from "drizzle-orm";
+import { and, count, desc, eq, gt, gte, inArray, isNotNull, isNull, lte } from "drizzle-orm";
 import { Hono } from "hono";
 import { db } from "../db";
 import {
@@ -34,7 +34,7 @@ import { deliverInteractionCallbacks } from "../lib/interaction-callbacks";
 import { verifyLiveActivityInteractionCredential } from "../lib/live-activity-interaction";
 import { resolveProjectForDelivery } from "../lib/projects";
 import { buildInteractionPushMessages, buildPushMessages, sendPushMessages } from "../lib/push";
-import { hashInteractionResponseToken } from "../lib/token";
+import { generateInteractionResponseToken, hashInteractionResponseToken } from "../lib/token";
 import {
   type AgentEnv,
   type AuthedEnv,
@@ -207,27 +207,26 @@ export const agentRoute = new Hono<AgentEnv>()
         platform: device.platform,
         deviceName: device.deviceName,
         active: device.active,
-        liveActivityPushToStartTokenCiphertext: device.liveActivityPushToStartTokenCiphertext,
-        liveActivityTokenEnvironment: device.liveActivityTokenEnvironment,
-        liveActivityTokenUpdatedAt: device.liveActivityTokenUpdatedAt,
+        notificationSchemaVersion: device.notificationSchemaVersion,
+        liveActivitySchemaVersion: device.liveActivitySchemaVersion,
+        liveActivityInteractionVersion: device.liveActivityInteractionVersion,
+        promotedNotificationsCapable: device.promotedNotificationsCapable,
         createdAt: device.createdAt,
         lastSeenAt: device.lastSeenAt,
       })
       .from(device)
-      .where(eq(device.userId, c.get("apiToken").userId))
+      .where(and(eq(device.userId, c.get("apiToken").userId), eq(device.platform, "android")))
       .orderBy(desc(device.lastSeenAt));
     return c.json({
       devices: rows.map((row) => ({
         ...row,
-        platform: "ios" as const,
-        liveActivitiesCapable: Boolean(row.liveActivityPushToStartTokenCiphertext),
-        liveActivityTokenEnvironment:
-          row.liveActivityTokenEnvironment === "sandbox" ||
-          row.liveActivityTokenEnvironment === "production"
-            ? row.liveActivityTokenEnvironment
-            : null,
-        liveActivityTokenUpdatedAt: row.liveActivityTokenUpdatedAt?.toISOString() ?? null,
-        liveActivityPushToStartTokenCiphertext: undefined,
+        platform: "android" as const,
+        notificationsCapable: row.notificationSchemaVersion === 1,
+        liveActivitiesCapable: row.liveActivitySchemaVersion === 1,
+        interactiveLiveActivitiesCapable: row.liveActivityInteractionVersion === 1,
+        promotedNotificationsCapable: row.promotedNotificationsCapable === true,
+        liveActivityTokenEnvironment: null,
+        liveActivityTokenUpdatedAt: null,
         createdAt: row.createdAt.toISOString(),
         lastSeenAt: row.lastSeenAt.toISOString(),
       })),
@@ -345,13 +344,25 @@ export const agentRoute = new Hono<AgentEnv>()
       if (owned.length !== parsed.data.deviceIds.length) {
         return c.json({ error: "Invalid device selection" }, 400);
       }
-      selectedDevices = owned.filter((row) => row.active && row.platform === "ios");
+      selectedDevices = owned.filter(
+        (row) =>
+          row.active &&
+          row.platform === "android" &&
+          row.fcmToken !== null &&
+          row.notificationSchemaVersion === 1,
+      );
     } else {
       selectedDevices = await db
         .select()
         .from(device)
         .where(
-          and(eq(device.userId, token.userId), eq(device.active, true), eq(device.platform, "ios")),
+          and(
+            eq(device.userId, token.userId),
+            eq(device.active, true),
+            eq(device.platform, "android"),
+            isNotNull(device.fcmToken),
+            eq(device.notificationSchemaVersion, 1),
+          ),
         )
         .orderBy(desc(device.lastSeenAt));
       if (billing.limits.devices !== null) {
@@ -419,7 +430,7 @@ export const agentRoute = new Hono<AgentEnv>()
           notification: toNotificationDto(outcome.row),
           accepted: 0,
           message: [
-            "No active iOS devices are registered for this account.",
+            "No active Android devices are registered for this account.",
             projectResolution.message,
           ]
             .filter(Boolean)
@@ -430,7 +441,9 @@ export const agentRoute = new Hono<AgentEnv>()
     }
 
     const messages = buildPushMessages({
-      to: selectedDevices.map((selected) => selected.expoPushToken),
+      to: selectedDevices.flatMap((selected) =>
+        selected.fcmToken ? [{ token: selected.fcmToken, deviceId: selected.id }] : [],
+      ),
       eventId: notificationId,
       serviceId: token.id,
       // Thread per sender name: each distinct --title from an agent
@@ -454,7 +467,7 @@ export const agentRoute = new Hono<AgentEnv>()
       await db
         .update(device)
         .set({ active: false })
-        .where(inArray(device.expoPushToken, result.staleTokens));
+        .where(inArray(device.fcmToken, result.staleTokens));
       track({
         name: "device_deactivated_stale",
         userId: token.userId,
@@ -481,13 +494,18 @@ export const agentRoute = new Hono<AgentEnv>()
       });
       await trackNotification(token.userId, notificationId);
     }
+    if (result.accepted === 0 && result.retryableFailures > 0 && idempotencyKey) {
+      await db.delete(agentNotification).where(eq(agentNotification.id, notificationId));
+      c.header("Retry-After", "1");
+      return c.json({ error: "FCM is temporarily unavailable" }, 503);
+    }
     await db
       .update(agentNotification)
       .set({ acceptedCount: result.accepted })
       .where(eq(agentNotification.id, notificationId));
     const messageParts = [
       // Provider errors can embed push tokens, so the reason is deliberately coarse.
-      ...(result.accepted === 0 ? ["No notifications were accepted by Expo."] : []),
+      ...(result.accepted === 0 ? ["No notifications were accepted by FCM."] : []),
       ...(projectResolution.message ? [projectResolution.message] : []),
     ];
     return c.json(
@@ -560,18 +578,30 @@ export const agentRoute = new Hono<AgentEnv>()
       if (owned.length !== parsed.data.deviceIds.length) {
         return c.json({ error: "Invalid device selection" }, 400);
       }
-      selectedDevices = owned.filter((row) => row.active && row.platform === "ios");
+      selectedDevices = owned.filter(
+        (row) => row.active && row.platform === "android" && row.fcmToken !== null,
+      );
     } else {
       selectedDevices = await db
         .select()
         .from(device)
         .where(
-          and(eq(device.userId, token.userId), eq(device.active, true), eq(device.platform, "ios")),
+          and(
+            eq(device.userId, token.userId),
+            eq(device.active, true),
+            eq(device.platform, "android"),
+            isNotNull(device.fcmToken),
+          ),
         )
         .orderBy(desc(device.lastSeenAt));
-      if (billing.limits.devices !== null) {
-        selectedDevices = selectedDevices.slice(0, billing.limits.devices);
-      }
+    }
+    selectedDevices = selectedDevices.filter((row) =>
+      presentation === "live_activity"
+        ? row.liveActivitySchemaVersion === 1 && row.liveActivityInteractionVersion === 1
+        : row.notificationSchemaVersion === 1 && row.interactionSchemaVersion === 1,
+    );
+    if (!parsed.data.deviceIds && billing.limits.devices !== null) {
+      selectedDevices = selectedDevices.slice(0, billing.limits.devices);
     }
 
     const since = new Date(Date.now() - 60_000);
@@ -643,6 +673,7 @@ export const agentRoute = new Hono<AgentEnv>()
 
     const now = new Date();
     const interactionId = newId("int");
+    const responseToken = generateInteractionResponseToken();
     const choices =
       parsed.data.kind === "approval"
         ? ["approve", "deny"]
@@ -687,6 +718,7 @@ export const agentRoute = new Hono<AgentEnv>()
       imageUrl: parsed.data.imageUrl ?? null,
       url: parsed.data.url ?? null,
       actionDigest,
+      responseTokenHash: hashInteractionResponseToken(responseToken),
       primaryLabel: presentation === "live_activity" ? primaryLabel : null,
       secondaryLabel: presentation === "live_activity" ? secondaryLabel : null,
       idempotencyKey: idempotencyKey ?? null,
@@ -741,7 +773,7 @@ export const agentRoute = new Hono<AgentEnv>()
         {
           interaction: toDto(row),
           accepted: 0,
-          message: "No active iOS devices are registered for this account.",
+          message: "No active Android devices are registered for this account.",
         },
         201,
       );
@@ -782,19 +814,23 @@ export const agentRoute = new Hono<AgentEnv>()
           accepted: liveResult.accepted,
           ...(liveResult.activityId ? { liveActivityId: liveResult.activityId } : {}),
           ...(liveResult.accepted === 0
-            ? { message: "No interactive Live Activities were accepted by APNs." }
+            ? { message: "No interactive Live Updates were accepted by FCM." }
             : {}),
         },
         201,
       );
     }
     const messages = buildInteractionPushMessages({
-      to: selectedDevices.map((selected) => selected.expoPushToken),
+      to: selectedDevices.flatMap((selected) =>
+        selected.fcmToken ? [{ token: selected.fcmToken, deviceId: selected.id }] : [],
+      ),
       interactionId: row.id,
       kind: parsed.data.kind,
       title: parsed.data.title,
       prompt: parsed.data.prompt,
       actionDigest,
+      responseToken,
+      expiresAt: row.expiresAt.toISOString(),
       imageUrl: parsed.data.imageUrl,
       url: parsed.data.url,
     });
@@ -803,7 +839,7 @@ export const agentRoute = new Hono<AgentEnv>()
       await db
         .update(device)
         .set({ active: false })
-        .where(inArray(device.expoPushToken, result.staleTokens));
+        .where(inArray(device.fcmToken, result.staleTokens));
       track({
         name: "device_deactivated_stale",
         userId: token.userId,
@@ -811,6 +847,11 @@ export const agentRoute = new Hono<AgentEnv>()
         outcome: "interaction",
         value: result.staleTokens.length,
       });
+    }
+    if (result.accepted === 0 && result.retryableFailures > 0 && idempotencyKey) {
+      await db.delete(interaction).where(eq(interaction.id, row.id));
+      c.header("Retry-After", "1");
+      return c.json({ error: "FCM is temporarily unavailable" }, 503);
     }
     const [updated] = await db
       .update(interaction)
@@ -841,7 +882,7 @@ export const agentRoute = new Hono<AgentEnv>()
         interaction: toDto(row),
         accepted: result.accepted,
         // Provider errors can embed push tokens, so the reason is deliberately coarse.
-        ...(result.accepted === 0 ? { message: "No notifications were accepted by Expo." } : {}),
+        ...(result.accepted === 0 ? { message: "No notifications were accepted by FCM." } : {}),
       },
       201,
     );
@@ -1042,6 +1083,9 @@ export const interactionCredentialResponseRoute = new Hono().post("/:id/respond"
     )
     .limit(1);
   if (!current) return c.json({ error: "Interaction not found" }, 404);
+  if (parsed.data.actionDigest && parsed.data.actionDigest !== current.actionDigest) {
+    return c.json({ error: "Invalid interaction response" }, 400);
+  }
   const [registeredDevice] = await db
     .select({ id: device.id })
     .from(device)

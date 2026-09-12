@@ -12,7 +12,7 @@ import {
   liveActivityStartSchema,
   liveActivityUpdateSchema,
 } from "@hark/contracts";
-import { and, count, desc, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { db } from "../db";
 import {
@@ -30,16 +30,10 @@ import {
 } from "../db/schema";
 import { env } from "../env";
 import { type AnalyticsEventName, failureBucket, track } from "../lib/analytics";
-import {
-  isInvalidApnsTokenReason,
-  type LiveActivityApnsEvent,
-  sendLiveActivityPush,
-} from "../lib/apns";
 import { checkNotificationAllowance, getBilling, trackNotification } from "../lib/billing";
+import { sendFcmMessages } from "../lib/fcm";
 import { newId } from "../lib/id";
 import { createLiveActivityInteractionCredential } from "../lib/live-activity-interaction";
-import { createLiveActivityRegistrationToken } from "../lib/live-activity-registration";
-import { decryptLiveActivityToken } from "../lib/token";
 import {
   type AgentEnv,
   type AuthedEnv,
@@ -53,6 +47,17 @@ export type DeliveryRow = typeof liveActivityDelivery.$inferSelect;
 export type ActivityRequester =
   | { requesterTokenId: string; requesterServiceId?: never }
   | { requesterTokenId?: never; requesterServiceId: string };
+
+type LiveActivityEvent = "start" | "update" | "end";
+
+interface ActivityDeliveryResult {
+  accepted: boolean;
+  status: number;
+  id: string | null;
+  reason: string | null;
+  staleToken: string | null;
+  retryable: boolean;
+}
 
 function hash(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -221,12 +226,12 @@ async function recordDelivery(
   requester: ActivityRequester,
   activityId: string,
   delivery: DeliveryRow,
-  eventName: LiveActivityApnsEvent,
+  eventName: LiveActivityEvent,
   sequence: number,
-  result: Awaited<ReturnType<typeof sendLiveActivityPush>>,
+  result: ActivityDeliveryResult,
 ): Promise<void> {
   const now = new Date();
-  const invalid = isInvalidApnsTokenReason(result.reason);
+  const retryableEnd = eventName === "end" && !result.accepted && result.retryable;
   db.transaction((tx) => {
     tx.insert(liveActivityDeliveryAttempt)
       .values({
@@ -239,7 +244,7 @@ async function recordDelivery(
         sequence,
         apnsStatus: result.status || null,
         apnsReason: result.reason,
-        apnsId: result.apnsId,
+        apnsId: result.id,
         createdAt: now,
       })
       .run();
@@ -247,7 +252,9 @@ async function recordDelivery(
       .set({
         status:
           eventName === "end"
-            ? "ended"
+            ? retryableEnd
+              ? delivery.status
+              : "ended"
             : result.accepted
               ? "accepted"
               : eventName === "start"
@@ -257,23 +264,28 @@ async function recordDelivery(
         lastSequence: sequence,
         lastApnsStatus: result.status || null,
         lastApnsReason: result.reason,
-        lastApnsId: result.apnsId,
+        lastApnsId: result.id,
         lastAttemptAt: now,
         updatedAt: now,
-        endedAt: eventName === "end" ? now : null,
-        ...(invalid ? { updateTokenCiphertext: null, updateTokenUpdatedAt: null } : {}),
+        endedAt: eventName === "end" && !retryableEnd ? now : delivery.endedAt,
+        ...(result.staleToken ? { updateTokenCiphertext: null, updateTokenUpdatedAt: null } : {}),
       })
-      .where(eq(liveActivityDelivery.id, delivery.id))
+      .where(
+        and(
+          eq(liveActivityDelivery.id, delivery.id),
+          lte(liveActivityDelivery.lastSequence, sequence),
+          ...(eventName === "end" && !result.accepted
+            ? [inArray(liveActivityDelivery.status, ["pending", "accepted", "active"])]
+            : []),
+        ),
+      )
       .run();
-    if (invalid && eventName === "start") {
+    if (result.staleToken) {
       tx.update(device)
         .set({
-          liveActivityPushToStartTokenCiphertext: null,
-          liveActivityTokenEnvironment: null,
-          liveActivitySchemaVersion: null,
-          liveActivityTokenUpdatedAt: null,
+          fcmToken: null,
         })
-        .where(eq(device.id, delivery.deviceId))
+        .where(and(eq(device.id, delivery.deviceId), eq(device.fcmToken, result.staleToken)))
         .run();
     }
   });
@@ -282,8 +294,8 @@ async function recordDelivery(
 async function sendDeliveryEvent(
   row: ActivityRow,
   delivery: DeliveryRow,
-  eventName: LiveActivityApnsEvent,
-): Promise<Awaited<ReturnType<typeof sendLiveActivityPush>>> {
+  eventName: LiveActivityEvent,
+): Promise<ActivityDeliveryResult> {
   const props = liveActivityPropsSchema.parse(row.props);
   const linkedInteraction = props.interaction
     ? await db
@@ -300,75 +312,94 @@ async function sendDeliveryEvent(
   ) {
     return {
       status: 0,
-      apnsId: null,
+      id: null,
       reason: "InteractionTerminal",
       accepted: false,
+      staleToken: null,
+      retryable: false,
     };
   }
-  let encryptedToken: string | null;
-  if (eventName === "start") {
-    const [target] = await db
-      .select({ token: device.liveActivityPushToStartTokenCiphertext })
-      .from(device)
-      .where(eq(device.id, delivery.deviceId))
-      .limit(1);
-    encryptedToken = target?.token ?? null;
-  } else {
-    encryptedToken = delivery.updateTokenCiphertext;
-  }
-  if (!encryptedToken) {
+  const [target] = await db
+    .select({ fcmToken: device.fcmToken })
+    .from(device)
+    .where(
+      and(
+        eq(device.id, delivery.deviceId),
+        eq(device.userId, row.userId),
+        eq(device.platform, "android"),
+        eq(device.active, true),
+      ),
+    )
+    .limit(1);
+  if (!target?.fcmToken) {
     return {
       status: 0,
-      apnsId: null,
-      reason: eventName === "start" ? "MissingPushToStartToken" : "MissingUpdateToken",
+      id: null,
+      reason: "MissingFcmToken",
       accepted: false,
+      staleToken: null,
+      retryable: false,
     };
   }
+  const interactionState =
+    linkedInteraction && props.interaction
+      ? {
+          ...props.interaction,
+          actionDigest: linkedInteraction.actionDigest,
+          credential: createLiveActivityInteractionCredential({
+            interactionId: linkedInteraction.id,
+            deliveryId: delivery.id,
+            deviceId: delivery.deviceId,
+            actionDigest: linkedInteraction.actionDigest,
+            expiresAt: linkedInteraction.expiresAt,
+          }),
+          deliveryId: delivery.id,
+          deviceId: delivery.deviceId,
+          expiresAt: linkedInteraction.expiresAt.toISOString(),
+          responseUrl: `${env.APP_URL.replace(/\/$/, "")}/api/live-activity-interactions/${encodeURIComponent(linkedInteraction.id)}/respond`,
+        }
+      : undefined;
+  const { interaction: _storedInteraction, ...baseProps } = props;
+  const dismissAfterSeconds = row.dismissalAt
+    ? Math.max(0, Math.round((row.dismissalAt.getTime() - Date.now()) / 1000))
+    : undefined;
   try {
-    return await sendLiveActivityPush(
-      decryptLiveActivityToken(encryptedToken),
-      delivery.environment as "sandbox" | "production",
+    const result = await sendFcmMessages([
       {
-        event: eventName,
-        props,
-        timestamp: row.apnsTimestamp,
-        ...(eventName === "start"
-          ? {
-              attributes: {
-                tokenRegistrationURL: `${env.APP_URL.replace(/\/$/, "")}/api/live-activity/update-token`,
-                tokenRegistrationToken: createLiveActivityRegistrationToken(
-                  delivery.id,
-                  row.id,
-                  row.expiresAt,
-                ),
-                deliveryId: delivery.id,
-                ...(linkedInteraction
-                  ? {
-                      harkInteractionId: linkedInteraction.id,
-                      harkInteractionCredential: createLiveActivityInteractionCredential({
-                        interactionId: linkedInteraction.id,
-                        deliveryId: delivery.id,
-                        deviceId: delivery.deviceId,
-                        actionDigest: linkedInteraction.actionDigest,
-                        expiresAt: linkedInteraction.expiresAt,
-                      }),
-                      harkInteractionDeviceId: delivery.deviceId,
-                    }
-                  : {}),
-              },
-            }
-          : {}),
-        ...(row.staleAt ? { staleDate: Math.floor(row.staleAt.getTime() / 1000) } : {}),
-        ...(row.dismissalAt ? { dismissalDate: Math.floor(row.dismissalAt.getTime() / 1000) } : {}),
+        token: target.fcmToken,
+        envelope: {
+          v: 1,
+          kind: "activity",
+          backendOrigin: env.APP_URL.replace(/\/$/, ""),
+          targetDeviceId: delivery.deviceId,
+          activityId: row.id,
+          sequence: row.sequence,
+          event: eventName,
+          state: interactionState ? { ...baseProps, interaction: interactionState } : baseProps,
+          expiresAt: row.expiresAt.toISOString(),
+          ...(dismissAfterSeconds !== undefined ? { dismissAfterSeconds } : {}),
+          title: props.title,
+          deepLink: `hark-android://inbox?activityId=${encodeURIComponent(row.id)}`,
+        },
       },
-      10,
-    );
+    ]);
+    const staleToken = result.staleTokens.includes(target.fcmToken) ? target.fcmToken : null;
+    return {
+      accepted: result.accepted === 1,
+      status: result.accepted === 1 ? 200 : 0,
+      id: null,
+      reason: result.errors[0] ?? (staleToken ? "Unregistered" : null),
+      staleToken,
+      retryable: result.retryableFailures > 0,
+    };
   } catch (error) {
     return {
       status: 0,
-      apnsId: null,
+      id: null,
       reason: error instanceof Error ? error.message : "DeliveryFailed",
       accepted: false,
+      staleToken: null,
+      retryable: true,
     };
   }
 }
@@ -377,7 +408,7 @@ export async function dispatchLiveActivity(
   row: ActivityRow,
   deliveries: DeliveryRow[],
   operationId: string,
-  eventName: LiveActivityApnsEvent,
+  eventName: LiveActivityEvent,
   requester: ActivityRequester,
 ): Promise<{ accepted: number; failed: number; errors: string[] }> {
   const results = await Promise.all(
@@ -402,6 +433,88 @@ export async function dispatchLiveActivity(
   };
 }
 
+async function liveDeliveriesFor(activityId: string): Promise<DeliveryRow[]> {
+  return db
+    .select()
+    .from(liveActivityDelivery)
+    .where(
+      and(
+        eq(liveActivityDelivery.activityId, activityId),
+        inArray(liveActivityDelivery.status, ["pending", "accepted", "active"]),
+      ),
+    );
+}
+
+export async function retryEndDelivery(
+  row: ActivityRow,
+  operation: typeof liveActivityOperation.$inferSelect,
+  requester: ActivityRequester,
+): Promise<{ accepted: number; failed: number; errors: string[] }> {
+  const retryableDeliveries = await db
+    .select()
+    .from(liveActivityDelivery)
+    .where(
+      and(
+        eq(liveActivityDelivery.activityId, row.id),
+        eq(liveActivityDelivery.lastEvent, "end"),
+        inArray(liveActivityDelivery.status, ["pending", "accepted", "active"]),
+      ),
+    );
+  if (retryableDeliveries.length === 0) {
+    return {
+      accepted: operation.acceptedCount,
+      failed: operation.failedCount,
+      errors: [],
+    };
+  }
+  const retry = await dispatchLiveActivity(
+    row,
+    retryableDeliveries,
+    operation.id,
+    "end",
+    requester,
+  );
+  const finalized = await db
+    .select({
+      status: liveActivityDelivery.status,
+      lastSequence: liveActivityDelivery.lastSequence,
+      lastApnsStatus: liveActivityDelivery.lastApnsStatus,
+    })
+    .from(liveActivityDelivery)
+    .where(
+      inArray(
+        liveActivityDelivery.id,
+        retryableDeliveries.map((delivery) => delivery.id),
+      ),
+    );
+  const targetCount = operation.acceptedCount + operation.failedCount;
+  const newlyAccepted = finalized.filter(
+    (delivery) =>
+      delivery.status === "ended" &&
+      delivery.lastSequence === row.sequence &&
+      delivery.lastApnsStatus === 200,
+  ).length;
+  const desiredAccepted = Math.min(targetCount, operation.acceptedCount + newlyAccepted);
+  const [updatedOperation] = await db
+    .update(liveActivityOperation)
+    .set({
+      acceptedCount: sql`max(${liveActivityOperation.acceptedCount}, ${desiredAccepted})`,
+      failedCount: sql`${targetCount} - max(${liveActivityOperation.acceptedCount}, ${desiredAccepted})`,
+    })
+    .where(eq(liveActivityOperation.id, operation.id))
+    .returning();
+  const result = {
+    accepted: updatedOperation?.acceptedCount ?? desiredAccepted,
+    failed: updatedOperation?.failedCount ?? targetCount - desiredAccepted,
+    errors: retry.errors,
+  };
+  await db
+    .update(liveActivity)
+    .set({ acceptedCount: result.accepted, failedCount: result.failed })
+    .where(eq(liveActivity.id, row.id));
+  return result;
+}
+
 type InteractionRow = typeof interaction.$inferSelect;
 type DeviceRow = typeof device.$inferSelect;
 
@@ -412,11 +525,10 @@ export async function startInteractionLiveActivity(
 ): Promise<{ activityId: string | null; accepted: number; failed: number; errors: string[] }> {
   const capableTargets = targets.filter(
     (target) =>
+      target.platform === "android" &&
       target.liveActivityInteractionVersion === 1 &&
-      target.liveActivityPushToStartTokenCiphertext &&
-      target.liveActivitySchemaVersion === LIVE_ACTIVITY_SCHEMA_VERSION &&
-      (target.liveActivityTokenEnvironment === "sandbox" ||
-        target.liveActivityTokenEnvironment === "production"),
+      target.fcmToken &&
+      target.liveActivitySchemaVersion === LIVE_ACTIVITY_SCHEMA_VERSION,
   );
   if (capableTargets.length === 0) {
     return { activityId: null, accepted: 0, failed: 0, errors: [] };
@@ -492,7 +604,7 @@ export async function startInteractionLiveActivity(
           deviceId: target.id,
           purpose: "interaction",
           status: "pending",
-          environment: target.liveActivityTokenEnvironment as "sandbox" | "production",
+          environment: "fcm",
           schemaVersion: LIVE_ACTIVITY_SCHEMA_VERSION,
           createdAt: now,
           updatedAt: now,
@@ -704,14 +816,14 @@ export async function replaceBlockingDeliveries(
       sequence: activity.sequence + 1,
       apnsTimestamp: Math.max(Math.floor(now.getTime() / 1000), activity.apnsTimestamp + 1),
       dismissalAt: now,
+      updatedAt: now,
+      endedAt: now,
     };
     await Promise.all(
       deliveries.map(async (delivery) => {
         const result = await sendDeliveryEvent(ending, delivery, "end");
-        // The delivery is released even when the push fails, matching how a
-        // rejected explicit end still frees the device. The update token is
-        // cleared so later operations on a surviving multi-device activity
-        // cannot resurrect this delivery.
+        // Release the device even when the end message fails. The terminal
+        // delivery state keeps later operations from reopening this lifecycle.
         await db
           .update(liveActivityDelivery)
           .set({
@@ -720,7 +832,7 @@ export async function replaceBlockingDeliveries(
             lastSequence: ending.sequence,
             lastApnsStatus: result.status || null,
             lastApnsReason: result.reason,
-            lastApnsId: result.apnsId,
+            lastApnsId: result.id,
             lastAttemptAt: now,
             updatedAt: now,
             endedAt: now,
@@ -948,7 +1060,7 @@ export const activitiesAgentRoute = new Hono<AgentEnv>()
         and(
           eq(device.userId, token.userId),
           eq(device.active, true),
-          eq(device.platform, "ios"),
+          eq(device.platform, "android"),
           ...(parsed.data.deviceIds ? [inArray(device.id, parsed.data.deviceIds)] : []),
         ),
       )
@@ -956,16 +1068,13 @@ export const activitiesAgentRoute = new Hono<AgentEnv>()
     if (parsed.data.deviceIds && targets.length !== parsed.data.deviceIds.length) {
       return c.json({ error: "Invalid device selection" }, 400);
     }
+    targets = targets.filter(
+      (target) =>
+        target.fcmToken && target.liveActivitySchemaVersion === LIVE_ACTIVITY_SCHEMA_VERSION,
+    );
     if (!parsed.data.deviceIds && billing.limits.devices !== null) {
       targets = targets.slice(0, billing.limits.devices);
     }
-    targets = targets.filter(
-      (target) =>
-        target.liveActivityPushToStartTokenCiphertext &&
-        target.liveActivitySchemaVersion === LIVE_ACTIVITY_SCHEMA_VERSION &&
-        (target.liveActivityTokenEnvironment === "sandbox" ||
-          target.liveActivityTokenEnvironment === "production"),
-    );
 
     const now = new Date();
     const blockers = await findBlockingDeliveries(
@@ -1120,7 +1229,7 @@ export const activitiesAgentRoute = new Hono<AgentEnv>()
                 activityId: createdActivityId,
                 deviceId: target.id,
                 status: "pending",
-                environment: target.liveActivityTokenEnvironment as "sandbox" | "production",
+                environment: "fcm",
                 schemaVersion: LIVE_ACTIVITY_SCHEMA_VERSION,
                 createdAt: now,
                 updatedAt: now,
@@ -1134,9 +1243,20 @@ export const activitiesAgentRoute = new Hono<AgentEnv>()
     const [updatedRow] = await db
       .update(liveActivity)
       .set({ status, acceptedCount: result.accepted, failedCount: result.failed, updatedAt: now })
-      .where(eq(liveActivity.id, row.id))
+      .where(
+        and(
+          eq(liveActivity.id, row.id),
+          eq(liveActivity.sequence, row.sequence),
+          inArray(liveActivity.status, ["starting", "active", "partial"]),
+        ),
+      )
       .returning();
-    row = updatedRow ?? row;
+    if (updatedRow) {
+      row = updatedRow;
+    } else {
+      const [current] = await db.select().from(liveActivity).where(eq(liveActivity.id, row.id));
+      row = current ?? row;
+    }
     await db
       .update(liveActivityOperation)
       .set({ acceptedCount: result.accepted, failedCount: result.failed })
@@ -1153,7 +1273,7 @@ export const activitiesAgentRoute = new Hono<AgentEnv>()
           ? {
               message:
                 result.errors.join("; ") ||
-                "No Live Activity-capable iOS devices are registered for this account.",
+                "No Live Update-capable Android devices are registered for this account.",
             }
           : {}),
       },
@@ -1295,10 +1415,7 @@ export const activitiesAgentRoute = new Hono<AgentEnv>()
       throw error;
     }
     if (!row) return c.json({ error: "Sequence conflict" }, 409);
-    const deliveries = await db
-      .select()
-      .from(liveActivityDelivery)
-      .where(eq(liveActivityDelivery.activityId, row.id));
+    const deliveries = await liveDeliveriesFor(row.id);
     const result = await dispatchLiveActivity(row, deliveries, operationId, "update", {
       requesterTokenId: token.id,
     });
@@ -1320,15 +1437,30 @@ export const activitiesAgentRoute = new Hono<AgentEnv>()
         acceptedCount: result.accepted,
         failedCount: result.failed,
       })
-      .where(eq(liveActivity.id, row.id))
+      .where(
+        and(
+          eq(liveActivity.id, row.id),
+          eq(liveActivity.sequence, row.sequence),
+          inArray(liveActivity.status, ["starting", "active", "partial"]),
+        ),
+      )
       .returning();
     await db
       .update(liveActivityOperation)
       .set({ acceptedCount: result.accepted, failedCount: result.failed })
       .where(eq(liveActivityOperation.id, operationId));
     if (result.accepted > 0) await trackNotification(token.userId, operationId);
+    const latest =
+      updated ??
+      (await db
+        .select()
+        .from(liveActivity)
+        .where(eq(liveActivity.id, row.id))
+        .limit(1)
+        .then((rows) => rows[0])) ??
+      row;
     return c.json<LiveActivityMutationResponse>({
-      activity: toLiveActivityDto(updated ?? row),
+      activity: toLiveActivityDto(latest),
       accepted: result.accepted,
       failed: result.failed,
       ...(result.errors.length ? { message: result.errors.join("; ") } : {}),
@@ -1348,11 +1480,15 @@ export const activitiesAgentRoute = new Hono<AgentEnv>()
       return c.json({ error: "Idempotency-Key was already used with a different payload" }, 409);
     }
     if (replay && !replay.conflict) {
+      const result = await retryEndDelivery(replay.row, replay.operation, {
+        requesterTokenId: token.id,
+      });
       return c.json<LiveActivityMutationResponse>({
         activity: toLiveActivityDto(replay.row),
-        accepted: replay.operation.acceptedCount,
-        failed: replay.operation.failedCount,
+        accepted: result.accepted,
+        failed: result.failed,
         idempotent: true,
+        ...(result.errors.length ? { message: result.errors.join("; ") } : {}),
       });
     }
     const current = await ownedActivity(token.id, c.req.param("identifier"));
@@ -1443,20 +1579,21 @@ export const activitiesAgentRoute = new Hono<AgentEnv>()
         return c.json({ error: "Idempotency-Key was already used with a different payload" }, 409);
       }
       if (raced && !raced.conflict) {
+        const result = await retryEndDelivery(raced.row, raced.operation, {
+          requesterTokenId: token.id,
+        });
         return c.json<LiveActivityMutationResponse>({
           activity: toLiveActivityDto(raced.row),
-          accepted: raced.operation.acceptedCount,
-          failed: raced.operation.failedCount,
+          accepted: result.accepted,
+          failed: result.failed,
           idempotent: true,
+          ...(result.errors.length ? { message: result.errors.join("; ") } : {}),
         });
       }
       throw error;
     }
     if (!row) return c.json({ error: "Sequence conflict" }, 409);
-    const deliveries = await db
-      .select()
-      .from(liveActivityDelivery)
-      .where(eq(liveActivityDelivery.activityId, row.id));
+    const deliveries = await liveDeliveriesFor(row.id);
     const result = await dispatchLiveActivity(row, deliveries, operationId, "end", {
       requesterTokenId: token.id,
     });

@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+timeout_seconds="${HARK_ANDROID_BOOT_TIMEOUT:-300}"
+deadline=$((SECONDS + timeout_seconds))
+avd_name="${HARK_ANDROID_AVD:-hark-pixel9-api37}"
+serial="${1:-}"
+
+while [[ -z "$serial" && SECONDS -lt deadline ]]; do
+  while read -r candidate state; do
+    [[ "$candidate" == emulator-* && "$state" == device ]] || continue
+    read -r running_avd < <(adb -s "$candidate" emu avd name 2>/dev/null || true)
+    running_avd="${running_avd%$'\r'}"
+    if [[ "$running_avd" == "$avd_name" ]]; then
+      serial="$candidate"
+      break
+    fi
+  done < <(adb devices | awk 'NR > 1 && NF >= 2 { print $1, $2 }')
+  [[ -n "$serial" ]] || sleep 2
+done
+
+if [[ -z "$serial" ]]; then
+  printf 'AVD %s did not appear within %s seconds\n' "$avd_name" "$timeout_seconds" >&2
+  exit 1
+fi
+
+adb -s "$serial" wait-for-device
+while [[ "$(adb -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" != "1" ]]; do
+  if ((SECONDS >= deadline)); then
+    printf 'Emulator %s did not finish booting within %s seconds\n' "$serial" "$timeout_seconds" >&2
+    exit 1
+  fi
+  sleep 2
+done
+
+printf '%s\n' "$serial"

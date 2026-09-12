@@ -1,11 +1,20 @@
+import { type HarkPushEnvelope, harkPushEnvelopeSchema } from "@hark/contracts";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 process.env.NODE_ENV = "test";
 process.env.DATABASE_URL = ":memory:";
+process.env.APP_URL = "https://hark.test";
 
 const authState = vi.hoisted(() => ({ userId: "activity_user_1" as string | null }));
-const apnsCalls = vi.hoisted(() => [] as Array<Record<string, unknown>>);
-const apnsState = vi.hoisted(() => ({ rejectEvent: null as string | null }));
+const fcmCalls = vi.hoisted(() => [] as Array<{ token: string; envelope: HarkPushEnvelope }>);
+const fcmState = vi.hoisted(() => ({
+  rejectEvent: null as string | null,
+  stale: false,
+  retryableFailure: false,
+  pauseUpdates: false,
+  updateStarted: null as (() => void) | null,
+  releaseUpdate: null as (() => void) | null,
+}));
 const billingState = vi.hoisted(() => ({ pro: true, serviceRate: 1000, accountRate: 1000 }));
 
 vi.mock("../auth", () => ({
@@ -45,27 +54,35 @@ vi.mock("../lib/billing", () => ({
   createBillingPortal: async () => "https://example.test",
 }));
 
-vi.mock("../lib/apns", () => ({
-  isInvalidApnsTokenReason: (reason: string | null) => reason === "Unregistered",
-  sendLiveActivityPush: async (
-    token: string,
-    environment: string,
-    input: Record<string, unknown>,
-    priority: number,
+vi.mock("../lib/fcm", () => ({
+  sendFcmMessages: async (
+    messages: ReadonlyArray<{ token: string; envelope: HarkPushEnvelope }>,
   ) => {
-    apnsCalls.push({ token, environment, input, priority });
-    if (input.event === apnsState.rejectEvent) {
-      return { status: 503, apnsId: null, reason: "Unavailable", accepted: false };
+    fcmCalls.push(...messages);
+    if (
+      fcmState.pauseUpdates &&
+      messages.some(({ envelope }) => envelope.kind === "activity" && envelope.event === "update")
+    ) {
+      fcmState.updateStarted?.();
+      await new Promise<void>((resolve) => {
+        fcmState.releaseUpdate = resolve;
+      });
     }
-    return { status: 200, apnsId: `apns-${apnsCalls.length}`, reason: null, accepted: true };
+    const rejected = messages.filter(
+      ({ envelope }) => envelope.kind === "activity" && envelope.event === fcmState.rejectEvent,
+    );
+    return {
+      accepted: messages.length - rejected.length,
+      errors: rejected.length > 0 ? ["Unavailable"] : [],
+      staleTokens: fcmState.stale ? messages.map(({ token }) => token) : [],
+      retryableFailures: fcmState.retryableFailure ? rejected.length : 0,
+    };
   },
 }));
 
 let app: typeof import("../app")["app"];
 let db: typeof import("../db")["db"];
 let schema: typeof import("../db/schema");
-let encryptLiveActivityToken: typeof import("../lib/token")["encryptLiveActivityToken"];
-let decryptLiveActivityToken: typeof import("../lib/token")["decryptLiveActivityToken"];
 let hashApiToken: typeof import("../lib/token")["hashApiToken"];
 
 const WRITE_SECRET = `hark_${"l".repeat(43)}`;
@@ -76,9 +93,7 @@ beforeAll(async () => {
   ({ app } = await import("../app"));
   ({ db } = await import("../db"));
   schema = await import("../db/schema");
-  ({ decryptLiveActivityToken, encryptLiveActivityToken, hashApiToken } = await import(
-    "../lib/token"
-  ));
+  ({ hashApiToken } = await import("../lib/token"));
   const { runMigrations } = await import("../db/migrate");
   runMigrations();
   const now = new Date();
@@ -93,8 +108,8 @@ beforeAll(async () => {
     },
     {
       id: "activity_user_2",
-      name: "Other Activity User",
-      email: "other-activity@example.com",
+      name: "Other User",
+      email: "other@example.com",
       emailVerified: true,
       createdAt: now,
       updatedAt: now,
@@ -104,39 +119,48 @@ beforeAll(async () => {
     {
       id: "activity_dev_1",
       userId: "activity_user_1",
-      expoPushToken: "ExponentPushToken[activity-1]",
-      platform: "ios",
+      expoPushToken: "fcm-activity-1",
+      fcmToken: "fcm-activity-1",
+      platform: "android",
       active: true,
-      liveActivityPushToStartTokenCiphertext: encryptLiveActivityToken("aa".repeat(32)),
-      liveActivityTokenEnvironment: "sandbox",
+      notificationSchemaVersion: 1,
       liveActivitySchemaVersion: 1,
-      liveActivityTokenUpdatedAt: now,
       createdAt: now,
       lastSeenAt: now,
     },
     {
       id: "activity_dev_2",
       userId: "activity_user_1",
-      expoPushToken: "ExponentPushToken[activity-2]",
-      platform: "ios",
+      expoPushToken: "fcm-activity-2",
+      fcmToken: "fcm-activity-2",
+      platform: "android",
       active: true,
-      liveActivityPushToStartTokenCiphertext: encryptLiveActivityToken("bb".repeat(32)),
-      liveActivityTokenEnvironment: "sandbox",
+      notificationSchemaVersion: 1,
       liveActivitySchemaVersion: 1,
-      liveActivityTokenUpdatedAt: now,
       createdAt: now,
       lastSeenAt: new Date(now.getTime() - 1000),
     },
     {
+      id: "activity_dev_incapable",
+      userId: "activity_user_1",
+      expoPushToken: "fcm-activity-incapable",
+      fcmToken: "fcm-activity-incapable",
+      platform: "android",
+      active: true,
+      notificationSchemaVersion: 1,
+      liveActivitySchemaVersion: null,
+      createdAt: now,
+      lastSeenAt: new Date(now.getTime() + 1000),
+    },
+    {
       id: "activity_dev_foreign",
       userId: "activity_user_2",
-      expoPushToken: "ExponentPushToken[activity-foreign]",
-      platform: "ios",
+      expoPushToken: "fcm-activity-foreign",
+      fcmToken: "fcm-activity-foreign",
+      platform: "android",
       active: true,
-      liveActivityPushToStartTokenCiphertext: encryptLiveActivityToken("cc".repeat(32)),
-      liveActivityTokenEnvironment: "sandbox",
+      notificationSchemaVersion: 1,
       liveActivitySchemaVersion: 1,
-      liveActivityTokenUpdatedAt: now,
       createdAt: now,
       lastSeenAt: now,
     },
@@ -177,29 +201,22 @@ beforeEach(async () => {
   billingState.pro = true;
   billingState.serviceRate = 1000;
   billingState.accountRate = 1000;
-  apnsCalls.length = 0;
-  apnsState.rejectEvent = null;
+  fcmCalls.length = 0;
+  fcmState.rejectEvent = null;
+  fcmState.stale = false;
+  fcmState.retryableFailure = false;
+  fcmState.pauseUpdates = false;
+  fcmState.updateStarted = null;
+  fcmState.releaseUpdate = null;
   await db.delete(schema.liveActivity);
   const { eq } = await import("drizzle-orm");
   await db
     .update(schema.device)
-    .set({
-      userId: "activity_user_1",
-      active: true,
-      liveActivityPushToStartTokenCiphertext: encryptLiveActivityToken("aa".repeat(32)),
-      liveActivityTokenEnvironment: "sandbox",
-      liveActivitySchemaVersion: 1,
-    })
+    .set({ userId: "activity_user_1", active: true, fcmToken: "fcm-activity-1" })
     .where(eq(schema.device.id, "activity_dev_1"));
   await db
     .update(schema.device)
-    .set({
-      userId: "activity_user_1",
-      active: true,
-      liveActivityPushToStartTokenCiphertext: encryptLiveActivityToken("bb".repeat(32)),
-      liveActivityTokenEnvironment: "sandbox",
-      liveActivitySchemaVersion: 1,
-    })
+    .set({ userId: "activity_user_1", active: true, fcmToken: "fcm-activity-2" })
     .where(eq(schema.device.id, "activity_dev_2"));
 });
 
@@ -214,7 +231,7 @@ function agent(path: string, token = WRITE_SECRET, init?: RequestInit) {
   });
 }
 
-async function start(
+function start(
   body: Record<string, unknown> = { title: "Release", status: "Starting" },
   idempotency?: string,
 ) {
@@ -225,28 +242,8 @@ async function start(
   });
 }
 
-async function registerUpdateToken(
-  activityId: string | undefined,
-  nativeActivityId: string | undefined,
-  updateToken: string,
-  deviceId = "activity_dev_1",
-) {
-  return app.request("/api/devices/live-activity/update-token", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      deviceId,
-      ...(activityId ? { activityId } : {}),
-      ...(nativeActivityId ? { nativeActivityId } : {}),
-      updateToken,
-      environment: "sandbox",
-      schemaVersion: 1,
-    }),
-  });
-}
-
-describe("Live Activity agent routes", () => {
-  it("requires write scope and requester ownership", async () => {
+describe("Android activity agent routes", () => {
+  it("keeps write scope and requester ownership checks", async () => {
     const denied = await agent("", READ_SECRET, {
       method: "POST",
       body: JSON.stringify({ title: "No", status: "No" }),
@@ -257,215 +254,93 @@ describe("Live Activity agent routes", () => {
     expect((await agent(`/${body.activity.id}`, OTHER_SECRET)).status).toBe(404);
   });
 
-  it("starts with exact expo-widgets content and is idempotent", async () => {
-    const first = await start(
-      {
+  it("sends full state and monotonic sequences without reactivating an ended activity", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-12T08:00:00.000Z"));
+    try {
+      const request = {
         title: "Release",
         status: "Building",
         progress: 0.2,
-        key: "release-main",
-        accentColor: "#FF9F0A",
-        style: "ring",
-      },
-      "start-release",
-    );
-    expect(first.status).toBe(201);
-    const body = (await first.json()) as { activity: { id: string }; accepted: number };
-    expect(body.accepted).toBe(2);
-    expect(apnsCalls).toHaveLength(2);
-    expect(apnsCalls[0]).toMatchObject({
-      environment: "sandbox",
-      priority: 10,
-      input: {
-        event: "start",
-        props: {
+        deviceIds: ["activity_dev_1"],
+        expiresInSeconds: 600,
+      };
+      const created = await start(request, "release-start");
+      expect(created.status).toBe(201);
+      const body = (await created.json()) as { activity: { id: string } };
+      expect(fcmCalls[0]).toMatchObject({
+        token: "fcm-activity-1",
+        envelope: {
+          v: 1,
+          kind: "activity",
+          backendOrigin: "https://hark.test",
+          targetDeviceId: "activity_dev_1",
           activityId: body.activity.id,
-          title: "Release",
-          status: "Building",
-          progress: 0.2,
-          accentColor: "#FF9F0A",
-          style: "ring",
+          sequence: 0,
+          event: "start",
+          state: { title: "Release", status: "Building", progress: 0.2 },
+          expiresAt: "2026-09-12T08:10:00.000Z",
+          deepLink: `hark-android://inbox?activityId=${body.activity.id}`,
         },
-      },
-    });
-    const replay = await start(
-      {
-        title: "Release",
-        status: "Building",
-        progress: 0.2,
-        key: "release-main",
-        accentColor: "#FF9F0A",
-        style: "ring",
-      },
-      "start-release",
-    );
-    expect(await replay.json()).toMatchObject({
-      idempotent: true,
-      activity: { id: body.activity.id },
-    });
-    expect(apnsCalls).toHaveLength(2);
-    expect((await start({ title: "Changed", status: "Building" }, "start-release")).status).toBe(
-      409,
-    );
-  });
+      });
+      expect(harkPushEnvelopeSchema.safeParse(fcmCalls[0]?.envelope).success).toBe(true);
 
-  it("applies Free device caps and makes targeted routing Pro-only", async () => {
-    billingState.pro = false;
-    expect(await (await start({ title: "Free", status: "Start" })).json()).toMatchObject({
-      accepted: 1,
-    });
-    expect(apnsCalls).toHaveLength(1);
-    const targeted = await start({
-      title: "Free",
-      status: "Start",
-      deviceIds: ["activity_dev_2"],
-    });
-    expect(targeted.status).toBe(402);
-    billingState.pro = true;
-    const foreign = await start({
-      title: "Pro",
-      status: "Start",
-      deviceIds: ["activity_dev_foreign"],
-    });
-    expect(foreign.status).toBe(400);
-  });
+      expect(await (await start(request, "release-start")).json()).toMatchObject({
+        idempotent: true,
+      });
+      expect(fcmCalls).toHaveLength(1);
 
-  it("enforces requester rate limits", async () => {
-    billingState.serviceRate = 0;
-    const response = await start();
-    expect(response.status).toBe(429);
-    expect(response.headers.get("Retry-After")).toBe("60");
-    expect(await response.json()).toMatchObject({ error: "Requester rate limit exceeded" });
-  });
-
-  it("registers encrypted tokens only for an owned device and activity", async () => {
-    const token = "dd".repeat(32);
-    const registered = await app.request("/api/devices/live-activity/push-to-start", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        deviceId: "activity_dev_1",
-        pushToStartToken: token,
-        environment: "sandbox",
-        schemaVersion: 1,
-      }),
-    });
-    expect(registered.status).toBe(200);
-    const { eq } = await import("drizzle-orm");
-    const [stored] = await db
-      .select({ token: schema.device.liveActivityPushToStartTokenCiphertext })
-      .from(schema.device)
-      .where(eq(schema.device.id, "activity_dev_1"));
-    expect(stored?.token).not.toContain(token);
-    expect(decryptLiveActivityToken(stored?.token ?? "")).toBe(token);
-
-    authState.userId = "activity_user_2";
-    const foreign = await app.request("/api/devices/live-activity/push-to-start", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        deviceId: "activity_dev_1",
-        pushToStartToken: token,
-        environment: "sandbox",
-        schemaVersion: 1,
-      }),
-    });
-    expect(foreign.status).toBe(404);
-  });
-
-  it("registers an update token then rejects stale sequences", async () => {
-    const created = await start({
-      title: "Sequence",
-      status: "Starting",
-      deviceIds: ["activity_dev_1"],
-    });
-    const startBody = (await created.json()) as { activity: { id: string; sequence: number } };
-    const registration = await app.request("/api/devices/live-activity/update-token", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        deviceId: "activity_dev_1",
-        activityId: startBody.activity.id,
-        nativeActivityId: "native-1",
-        updateToken: "ee".repeat(32),
-        environment: "sandbox",
-        schemaVersion: 1,
-      }),
-    });
-    expect(registration.status).toBe(200);
-
-    apnsCalls.length = 0;
-    const updated = await agent(`/${startBody.activity.id}`, WRITE_SECRET, {
-      method: "PATCH",
-      headers: { "Idempotency-Key": "sequence-update" },
-      body: JSON.stringify({
-        status: "Testing",
-        progress: 0.5,
-        accentColor: "#64D2FF",
-        ifSequence: 0,
-      }),
-    });
-    expect(await updated.json()).toMatchObject({
-      accepted: 1,
-      activity: {
+      const updated = await agent(`/${body.activity.id}`, WRITE_SECRET, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "Testing", progress: 0.7, ifSequence: 0 }),
+      });
+      expect(await updated.json()).toMatchObject({
+        accepted: 1,
+        activity: { sequence: 1, props: { title: "Release", status: "Testing", progress: 0.7 } },
+      });
+      expect(fcmCalls[1]?.envelope).toMatchObject({
         sequence: 1,
-        props: { status: "Testing", progress: 0.5, accentColor: "#64D2FF" },
-      },
-    });
-    expect(apnsCalls[0]).toMatchObject({ token: "ee".repeat(32), priority: 10 });
+        event: "update",
+        state: { title: "Release", status: "Testing", progress: 0.7 },
+      });
 
-    const stale = await agent(`/${startBody.activity.id}`, WRITE_SECRET, {
-      method: "PATCH",
-      body: JSON.stringify({ status: "Late", ifSequence: 0 }),
-    });
-    expect(stale.status).toBe(409);
-    expect(await stale.json()).toMatchObject({ error: "Sequence conflict" });
+      const stale = await agent(`/${body.activity.id}`, WRITE_SECRET, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "Late", ifSequence: 0 }),
+      });
+      expect(stale.status).toBe(409);
+      expect(fcmCalls).toHaveLength(2);
+
+      const ended = await agent(`/${body.activity.id}/end`, WRITE_SECRET, {
+        method: "POST",
+        body: JSON.stringify({ status: "Complete", progress: 1, dismissAfterSeconds: 30 }),
+      });
+      expect(await ended.json()).toMatchObject({
+        accepted: 1,
+        activity: { sequence: 2, status: "ended" },
+      });
+      expect(fcmCalls[2]?.envelope).toMatchObject({
+        sequence: 2,
+        event: "end",
+        dismissAfterSeconds: 30,
+        state: { title: "Release", status: "Complete", progress: 1 },
+      });
+      expect(harkPushEnvelopeSchema.safeParse(fcmCalls[2]?.envelope).success).toBe(true);
+      expect(
+        (
+          await agent(`/${body.activity.id}`, WRITE_SECRET, {
+            method: "PATCH",
+            body: JSON.stringify({ status: "Resurrected" }),
+          })
+        ).status,
+      ).toBe(409);
+      expect(fcmCalls).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it("rotates the token for an already associated native activity", async () => {
-    const created = await start({
-      title: "Rotation",
-      status: "Starting",
-      deviceIds: ["activity_dev_1"],
-    });
-    const body = (await created.json()) as { activity: { id: string } };
-    expect(
-      (await registerUpdateToken(body.activity.id, "native-rotation", "12".repeat(32))).status,
-    ).toBe(200);
-
-    const rotated = await registerUpdateToken(undefined, "native-rotation", "34".repeat(32));
-    expect(rotated.status).toBe(200);
-    expect(await rotated.json()).toMatchObject({ activityId: body.activity.id });
-
-    const { eq } = await import("drizzle-orm");
-    const delivery = db
-      .select({ token: schema.liveActivityDelivery.updateTokenCiphertext })
-      .from(schema.liveActivityDelivery)
-      .where(eq(schema.liveActivityDelivery.activityId, body.activity.id))
-      .get();
-    expect(decryptLiveActivityToken(delivery?.token ?? "")).toBe("34".repeat(32));
-  });
-
-  it("rejects a second active Hark activity on the same device", async () => {
-    const first = await start({
-      title: "Associated",
-      status: "Starting",
-      deviceIds: ["activity_dev_1"],
-    });
-    const firstBody = (await first.json()) as { activity: { id: string } };
-    const second = await start({
-      title: "Pending",
-      status: "Starting",
-      deviceIds: ["activity_dev_1"],
-    });
-    expect(second.status).toBe(409);
-    expect(await second.json()).toMatchObject({
-      code: "ACTIVE_ACTIVITY_CONFLICT",
-      activityId: firstBody.activity.id,
-    });
-  });
-
-  it("replaces the blocking activity when replace is true", async () => {
+  it("ends the old lifecycle before replacing its device slot", async () => {
     const first = await start({
       title: "Old run",
       status: "Running",
@@ -473,172 +348,84 @@ describe("Live Activity agent routes", () => {
     });
     const firstBody = (await first.json()) as { activity: { id: string } };
     expect(
-      (await registerUpdateToken(firstBody.activity.id, "native-replaced", "ba".repeat(32))).status,
-    ).toBe(200);
+      (
+        await start({
+          title: "Blocked",
+          status: "Starting",
+          deviceIds: ["activity_dev_1"],
+        })
+      ).status,
+    ).toBe(409);
 
-    apnsCalls.length = 0;
-    const second = await start({
+    fcmCalls.length = 0;
+    const replacementRequest = {
       title: "New run",
       status: "Starting",
       replace: true,
       deviceIds: ["activity_dev_1"],
+    };
+    const replacement = await start(replacementRequest, "replacement-once");
+    const replacementBody = (await replacement.json()) as {
+      activity: { id: string };
+      replaced: number;
+    };
+    expect(replacementBody.replaced).toBe(1);
+    expect(fcmCalls.map(({ envelope }) => envelope)).toMatchObject([
+      { activityId: firstBody.activity.id, sequence: 1, event: "end", dismissAfterSeconds: 0 },
+      { activityId: replacementBody.activity.id, sequence: 0, event: "start" },
+    ]);
+    expect(await (await start(replacementRequest, "replacement-once")).json()).toMatchObject({
+      idempotent: true,
+      activity: { id: replacementBody.activity.id },
     });
-    expect(second.status).toBe(201);
-    const secondBody = (await second.json()) as { activity: { id: string } };
-    expect(secondBody).toMatchObject({ accepted: 1, replaced: 1 });
+    expect(fcmCalls).toHaveLength(2);
+  });
 
-    expect(apnsCalls).toHaveLength(2);
-    expect(apnsCalls[0]).toMatchObject({
-      token: "ba".repeat(32),
-      priority: 10,
-      input: { event: "end", props: { activityId: firstBody.activity.id, title: "Old run" } },
-    });
-    expect(apnsCalls[1]).toMatchObject({
-      input: { event: "start", props: { activityId: secondBody.activity.id } },
+  it("does not send later updates to a delivery ended by replacement", async () => {
+    const first = await start({ title: "Old run", status: "Running" });
+    const firstBody = (await first.json()) as { activity: { id: string } };
+    await start({
+      title: "Replacement",
+      status: "Starting",
+      replace: true,
+      deviceIds: ["activity_dev_1"],
     });
 
-    const { eq } = await import("drizzle-orm");
-    const oldActivity = db
-      .select()
-      .from(schema.liveActivity)
-      .where(eq(schema.liveActivity.id, firstBody.activity.id))
-      .get();
-    expect(oldActivity).toMatchObject({ status: "ended" });
-    expect(oldActivity?.endedAt).not.toBeNull();
-    const oldDelivery = db
+    fcmCalls.length = 0;
+    const updated = await agent(`/${firstBody.activity.id}`, WRITE_SECRET, {
+      method: "PATCH",
+      body: JSON.stringify({ status: "Still running elsewhere" }),
+    });
+
+    expect(await updated.json()).toMatchObject({ accepted: 1, failed: 0 });
+    expect(fcmCalls).toHaveLength(1);
+    expect(fcmCalls[0]).toMatchObject({
+      token: "fcm-activity-2",
+      envelope: { activityId: firstBody.activity.id, event: "update" },
+    });
+    const { and, eq } = await import("drizzle-orm");
+    const endedDelivery = db
       .select()
       .from(schema.liveActivityDelivery)
-      .where(eq(schema.liveActivityDelivery.activityId, firstBody.activity.id))
+      .where(
+        and(
+          eq(schema.liveActivityDelivery.activityId, firstBody.activity.id),
+          eq(schema.liveActivityDelivery.deviceId, "activity_dev_1"),
+        ),
+      )
       .get();
-    expect(oldDelivery).toMatchObject({ status: "ended", lastEvent: "end" });
+    expect(endedDelivery).toMatchObject({ status: "ended", lastEvent: "end" });
   });
 
-  it("reuses a key after the keyed activity ends", async () => {
-    const first = await start({
-      title: "Keyed",
-      status: "Running",
-      key: "deploy",
-      deviceIds: ["activity_dev_1"],
-    });
-    expect(first.status).toBe(201);
-    const firstBody = (await first.json()) as { activity: { id: string } };
-    expect(
-      (
-        await agent("/deploy/end", WRITE_SECRET, {
-          method: "POST",
-          body: JSON.stringify({}),
-        })
-      ).status,
-    ).toBe(200);
-
-    const second = await start({
-      title: "Keyed again",
-      status: "Running",
-      key: "deploy",
-      deviceIds: ["activity_dev_1"],
-    });
-    expect(second.status).toBe(201);
-    const secondBody = (await second.json()) as { activity: { id: string } };
-    expect(secondBody.activity.id).not.toBe(firstBody.activity.id);
-
-    const read = await agent("/deploy");
-    expect(await read.json()).toMatchObject({ activity: { id: secondBody.activity.id } });
-  });
-
-  it("uses strictly increasing APNs timestamps for same-second updates", async () => {
+  it("clears a stale FCM token while keeping the activity terminal", async () => {
     const created = await start({
-      title: "Timestamp",
-      status: "Starting",
-      deviceIds: ["activity_dev_1"],
-    });
-    const body = (await created.json()) as { activity: { id: string } };
-    await registerUpdateToken(body.activity.id, "native-timestamp", "9a".repeat(32));
-    apnsCalls.length = 0;
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-23T12:34:56.000Z"));
-    try {
-      await agent(`/${body.activity.id}`, WRITE_SECRET, {
-        method: "PATCH",
-        body: JSON.stringify({ status: "First" }),
-      });
-      await agent(`/${body.activity.id}`, WRITE_SECRET, {
-        method: "PATCH",
-        body: JSON.stringify({ status: "Second" }),
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-    const timestamps = apnsCalls.map((call) => (call.input as { timestamp: number }).timestamp);
-    expect(timestamps).toHaveLength(2);
-    expect(timestamps[1]).toBe((timestamps[0] ?? 0) + 1);
-  });
-
-  it("keeps a zero-acceptance update retryable and the device occupied", async () => {
-    const created = await start({
-      title: "No update token",
-      status: "Starting",
-      deviceIds: ["activity_dev_2"],
-    });
-    const body = (await created.json()) as { activity: { id: string } };
-    const response = await agent(`/${body.activity.id}`, WRITE_SECRET, {
-      method: "PATCH",
-      body: JSON.stringify({ status: "Cannot deliver" }),
-    });
-    expect(await response.json()).toMatchObject({
-      accepted: 0,
-      failed: 1,
-      activity: { status: "active" },
-    });
-    const conflicting = await start({
-      title: "Still occupied",
-      status: "Starting",
-      deviceIds: ["activity_dev_2"],
-    });
-    expect(conflicting.status).toBe(409);
-  });
-
-  it("ends terminally with optimistic sequencing", async () => {
-    const created = await start({ title: "End", status: "Running", deviceIds: ["activity_dev_1"] });
-    const body = (await created.json()) as { activity: { id: string } };
-    await app.request("/api/devices/live-activity/update-token", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        deviceId: "activity_dev_1",
-        activityId: body.activity.id,
-        updateToken: "ff".repeat(32),
-        environment: "sandbox",
-        schemaVersion: 1,
-      }),
-    });
-    const ended = await agent(`/${body.activity.id}/end`, WRITE_SECRET, {
-      method: "POST",
-      body: JSON.stringify({ status: "Complete", progress: 1, ifSequence: 0 }),
-    });
-    expect(await ended.json()).toMatchObject({
-      accepted: 1,
-      activity: { status: "ended", sequence: 1, props: { status: "Complete", progress: 1 } },
-    });
-    expect(apnsCalls.at(-1)).toMatchObject({ priority: 10, input: { event: "end" } });
-    expect(
-      (
-        await agent(`/${body.activity.id}/end`, WRITE_SECRET, {
-          method: "POST",
-          body: JSON.stringify({}),
-        })
-      ).status,
-    ).toBe(409);
-  });
-
-  it("releases the device lock when an end push is rejected", async () => {
-    const created = await start({
-      title: "Dismissed",
+      title: "Stale device",
       status: "Running",
       deviceIds: ["activity_dev_1"],
     });
     const body = (await created.json()) as { activity: { id: string } };
-    await registerUpdateToken(body.activity.id, "native-dismissed", "cd".repeat(32));
-    apnsState.rejectEvent = "end";
+    fcmState.stale = true;
+    fcmState.rejectEvent = "end";
     const ended = await agent(`/${body.activity.id}/end`, WRITE_SECRET, {
       method: "POST",
       body: JSON.stringify({}),
@@ -646,75 +433,189 @@ describe("Live Activity agent routes", () => {
     expect(await ended.json()).toMatchObject({
       accepted: 0,
       failed: 1,
-      activity: { status: "ended" },
+      activity: { status: "ended", sequence: 1 },
     });
-    apnsState.rejectEvent = null;
-    const replacement = await start({
-      title: "Replacement",
-      status: "Starting",
-      deviceIds: ["activity_dev_1"],
-    });
-    expect(replacement.status).toBe(201);
+    const { eq } = await import("drizzle-orm");
+    const registered = db
+      .select({ fcmToken: schema.device.fcmToken })
+      .from(schema.device)
+      .where(eq(schema.device.id, "activity_dev_1"))
+      .get();
+    expect(registered?.fcmToken).toBeNull();
+    expect(
+      (
+        await agent(`/${body.activity.id}`, WRITE_SECRET, {
+          method: "PATCH",
+          body: JSON.stringify({ status: "Must stay ended" }),
+        })
+      ).status,
+    ).toBe(409);
   });
 
-  it("revokes Live Activity capability atomically when device ownership changes", async () => {
+  it("retries a transient end failure with the same idempotency key", async () => {
     const created = await start({
-      title: "Transferred",
+      title: "Retry end",
       status: "Running",
-      deviceIds: ["activity_dev_2"],
+      deviceIds: ["activity_dev_1"],
     });
     const body = (await created.json()) as { activity: { id: string } };
-    await registerUpdateToken(
-      body.activity.id,
-      "native-transfer",
-      "ab".repeat(32),
-      "activity_dev_2",
-    );
+    fcmState.rejectEvent = "end";
+    fcmState.retryableFailure = true;
+    const endBody = { status: "Done", dismissAfterSeconds: 10 };
 
-    authState.userId = "activity_user_2";
-    const transfer = await app.request("/api/devices", {
+    const failed = await agent(`/${body.activity.id}/end`, WRITE_SECRET, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        expoPushToken: "ExponentPushToken[activity-2]",
-        platform: "ios",
-        deviceName: "Transferred phone",
-      }),
+      headers: { "Idempotency-Key": "retry-end" },
+      body: JSON.stringify(endBody),
     });
-    expect(transfer.status).toBe(201);
-    authState.userId = "activity_user_1";
+    expect(await failed.json()).toMatchObject({
+      accepted: 0,
+      failed: 1,
+      activity: { status: "ended", sequence: 1 },
+    });
+    const { eq } = await import("drizzle-orm");
+    expect(
+      db
+        .select()
+        .from(schema.liveActivityDelivery)
+        .where(eq(schema.liveActivityDelivery.activityId, body.activity.id))
+        .get(),
+    ).toMatchObject({ status: "accepted", lastEvent: "end", lastSequence: 1, endedAt: null });
+
+    fcmState.rejectEvent = null;
+    fcmState.retryableFailure = false;
+    const retried = await agent(`/${body.activity.id}/end`, WRITE_SECRET, {
+      method: "POST",
+      headers: { "Idempotency-Key": "retry-end" },
+      body: JSON.stringify(endBody),
+    });
+    expect(await retried.json()).toMatchObject({
+      accepted: 1,
+      failed: 0,
+      idempotent: true,
+      activity: { status: "ended", sequence: 1 },
+    });
+    expect(fcmCalls.slice(-2).map(({ envelope }) => envelope)).toMatchObject([
+      { event: "end", sequence: 1 },
+      { event: "end", sequence: 1 },
+    ]);
+    expect(
+      db
+        .select()
+        .from(schema.liveActivityDelivery)
+        .where(eq(schema.liveActivityDelivery.activityId, body.activity.id))
+        .get(),
+    ).toMatchObject({ status: "ended", lastEvent: "end", lastSequence: 1 });
+
+    const sent = fcmCalls.length;
+    await agent(`/${body.activity.id}/end`, WRITE_SECRET, {
+      method: "POST",
+      headers: { "Idempotency-Key": "retry-end" },
+      body: JSON.stringify(endBody),
+    });
+    expect(fcmCalls).toHaveLength(sent);
+  });
+
+  it("does not send activity state after a device changes owners", async () => {
+    const created = await start({
+      title: "Private task",
+      status: "Running",
+      deviceIds: ["activity_dev_1"],
+    });
+    const body = (await created.json()) as { activity: { id: string } };
+    const { eq } = await import("drizzle-orm");
+    await db
+      .update(schema.device)
+      .set({ userId: "activity_user_2" })
+      .where(eq(schema.device.id, "activity_dev_1"));
+    fcmCalls.length = 0;
+
+    const updated = await agent(`/${body.activity.id}`, WRITE_SECRET, {
+      method: "PATCH",
+      body: JSON.stringify({ status: "Sensitive update" }),
+    });
+    expect(await updated.json()).toMatchObject({ accepted: 0, failed: 1 });
+    expect(fcmCalls).toHaveLength(0);
+  });
+
+  it("does not let a late update result reopen an ended activity or delivery", async () => {
+    const created = await start({
+      title: "Concurrent",
+      status: "Running",
+      deviceIds: ["activity_dev_1"],
+    });
+    const body = (await created.json()) as { activity: { id: string } };
+    let signalStarted: (() => void) | undefined;
+    const updateStarted = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    fcmState.pauseUpdates = true;
+    fcmState.updateStarted = signalStarted ?? null;
+    const updateRequest = agent(`/${body.activity.id}`, WRITE_SECRET, {
+      method: "PATCH",
+      body: JSON.stringify({ status: "Almost done" }),
+    });
+    await updateStarted;
+
+    const ended = await agent(`/${body.activity.id}/end`, WRITE_SECRET, {
+      method: "POST",
+      body: JSON.stringify({ status: "Done" }),
+    });
+    expect(ended.status).toBe(200);
+    fcmState.releaseUpdate?.();
+    const lateUpdate = await updateRequest;
+    expect(lateUpdate.status).toBe(200);
+    expect(await lateUpdate.json()).toMatchObject({ activity: { status: "ended", sequence: 2 } });
 
     const { eq } = await import("drizzle-orm");
-    const transferredDevice = db
+    const activity = db
       .select()
-      .from(schema.device)
-      .where(eq(schema.device.id, "activity_dev_2"))
+      .from(schema.liveActivity)
+      .where(eq(schema.liveActivity.id, body.activity.id))
       .get();
-    const transferredDelivery = db
+    expect(activity).toMatchObject({ status: "ended", sequence: 2 });
+    const delivery = db
       .select()
       .from(schema.liveActivityDelivery)
       .where(eq(schema.liveActivityDelivery.activityId, body.activity.id))
       .get();
-    expect(transferredDevice).toMatchObject({
-      userId: "activity_user_2",
-      liveActivityPushToStartTokenCiphertext: null,
-      liveActivityTokenEnvironment: null,
-      liveActivitySchemaVersion: null,
-      liveActivityTokenUpdatedAt: null,
-    });
-    expect(transferredDelivery).toMatchObject({
-      status: "failed",
-      updateTokenCiphertext: null,
-      updateTokenUpdatedAt: null,
-      lastApnsReason: "OwnerChanged",
-    });
+    expect(delivery).toMatchObject({ status: "ended", lastEvent: "end", lastSequence: 2 });
+    const sent = fcmCalls.length;
+    expect(
+      (
+        await agent(`/${body.activity.id}`, WRITE_SECRET, {
+          method: "PATCH",
+          body: JSON.stringify({ status: "Must stay ended" }),
+        })
+      ).status,
+    ).toBe(409);
+    expect(fcmCalls).toHaveLength(sent);
+  });
 
-    apnsCalls.length = 0;
-    const update = await agent(`/${body.activity.id}`, WRITE_SECRET, {
-      method: "PATCH",
-      body: JSON.stringify({ status: "Must not dispatch" }),
-    });
-    expect(await update.json()).toMatchObject({ accepted: 0, activity: { status: "failed" } });
-    expect(apnsCalls).toHaveLength(0);
+  it("keeps device routing and rate limits", async () => {
+    billingState.pro = false;
+    expect(
+      (
+        await start({
+          title: "Free",
+          status: "Start",
+          deviceIds: ["activity_dev_2"],
+        })
+      ).status,
+    ).toBe(402);
+    billingState.pro = true;
+    billingState.serviceRate = 0;
+    const limited = await start();
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("Retry-After")).toBe("60");
+  });
+
+  it("applies the device limit after filtering for live update capability", async () => {
+    billingState.pro = false;
+    const created = await start({ title: "Free", status: "Start" });
+    expect(created.status).toBe(201);
+    expect(await created.json()).toMatchObject({ accepted: 1, failed: 0 });
+    expect(fcmCalls).toHaveLength(1);
+    expect(fcmCalls[0]).toMatchObject({ token: "fcm-activity-1" });
   });
 });

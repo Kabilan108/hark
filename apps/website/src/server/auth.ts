@@ -1,10 +1,24 @@
 import { expo } from "@better-auth/expo";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { APIError } from "better-auth/api";
+import { eq } from "drizzle-orm";
 import { db } from "./db";
 import * as schema from "./db/schema";
 import { env } from "./env";
-import { appleAuthConfig, generateAppleClientSecret, revokeAppleGrantsForUser } from "./lib/apple";
+import {
+  isAllowedGoogleOwnerProfile,
+  isAllowedOwnerAccount,
+  isAllowedOwnerAccountDeletion,
+  isAllowedOwnerUserRecord,
+  isAuthorizedOwnerUser,
+} from "./lib/owner";
+
+function rejectUnauthorizedIdentity(): never {
+  throw new APIError("FORBIDDEN", {
+    message: "This Google account is not authorized for this Hark server.",
+  });
+}
 
 export const auth = betterAuth({
   appName: "Hark",
@@ -17,51 +31,85 @@ export const auth = betterAuth({
   account: {
     encryptOAuthTokens: true,
   },
-  user: {
-    deleteUser: {
-      enabled: true,
-      beforeDelete: async (user) => revokeAppleGrantsForUser(user.id),
-    },
-  },
   socialProviders: {
     google: {
       clientId: env.GOOGLE_CLIENT_ID ?? "",
       clientSecret: env.GOOGLE_CLIENT_SECRET ?? "",
       disableDefaultScope: true,
       scope: ["openid", "email", "profile"],
+      mapProfileToUser: async (profile) => {
+        if (!(await isAllowedGoogleOwnerProfile(profile))) rejectUnauthorizedIdentity();
+        return {};
+      },
     },
-    apple: async () => {
-      const clientId = env.APPLE_SIGN_IN_SERVICE_ID ?? "";
-      const configured =
-        clientId && env.APPLE_TEAM_ID && env.APPLE_SIGN_IN_KEY_ID && env.APPLE_SIGN_IN_PRIVATE_KEY;
-      return {
-        clientId,
-        clientSecret: configured
-          ? await generateAppleClientSecret(
-              clientId,
-              appleAuthConfig(),
-              undefined,
-              180 * 24 * 60 * 60,
-            )
-          : "",
-        appBundleIdentifier: env.APPLE_SIGN_IN_BUNDLE_ID,
-        // Better Auth 1.6.25's appBundleIdentifier alone replaces the web audience;
-        // audience explicitly accepts both the Services ID and native App ID.
-        audience: [clientId, env.APPLE_SIGN_IN_BUNDLE_ID],
-      };
+  },
+  databaseHooks: {
+    user: {
+      create: {
+        before: async (user) => {
+          if (!isAllowedOwnerUserRecord(user)) rejectUnauthorizedIdentity();
+        },
+      },
+    },
+    account: {
+      create: {
+        before: async (account) => {
+          if (!isAllowedOwnerAccount(account)) rejectUnauthorizedIdentity();
+        },
+      },
+      delete: {
+        before: async (account) => {
+          if (!isAllowedOwnerAccountDeletion(account)) rejectUnauthorizedIdentity();
+        },
+      },
+    },
+    session: {
+      create: {
+        before: async (session) => {
+          if (!(await isAuthorizedOwnerUser(session.userId))) rejectUnauthorizedIdentity();
+        },
+      },
     },
   },
   plugins: [expo()],
-  trustedOrigins: [env.APP_URL, "https://appleid.apple.com", "hark://", "hark://*"],
-  advanced: env.APP_URL.startsWith("https://")
-    ? {
-        // Apple returns OAuth callbacks with a cross-site form POST. Better Auth
-        // 1.6.25 still requires its signed state cookie on that request.
-        cookies: {
-          state: { attributes: { sameSite: "none", secure: true } },
-        },
-      }
-    : undefined,
+  trustedOrigins: [env.APP_URL, "hark-android://", "hark-android://*"],
 });
+
+const PUBLIC_AUTH_PATHS = new Set([
+  "/error",
+  "/expo-authorization-proxy",
+  "/ok",
+  "/sign-in/social",
+  "/sign-out",
+]);
+
+/**
+ * Keeps Better Auth's own account endpoints behind the same owner policy as Hark APIs.
+ * A stale non-owner session is removed when it is presented to this private server.
+ */
+export async function handleAuthRequest(request: Request): Promise<Response> {
+  const pathname = new URL(request.url).pathname;
+  const authPath = pathname.startsWith("/api/auth") ? pathname.slice("/api/auth".length) : pathname;
+
+  if (authPath === "/get-session") {
+    const currentSession = await auth.api.getSession({ headers: request.headers });
+    if (currentSession && !(await isAuthorizedOwnerUser(currentSession.user.id))) {
+      await db.delete(schema.session).where(eq(schema.session.id, currentSession.session.id));
+      return Response.json(null, {
+        headers: { "cache-control": "no-store", pragma: "no-cache" },
+      });
+    }
+  } else if (!PUBLIC_AUTH_PATHS.has(authPath) && authPath !== "/callback/google") {
+    const currentSession = await auth.api.getSession({ headers: request.headers });
+    if (!currentSession || !(await isAuthorizedOwnerUser(currentSession.user.id))) {
+      if (currentSession) {
+        await db.delete(schema.session).where(eq(schema.session.id, currentSession.session.id));
+      }
+      return Response.json({ error: "Unauthorized" }, { status: 401 });
+    }
+  }
+
+  return auth.handler(request);
+}
 
 export type Session = typeof auth.$Infer.Session;

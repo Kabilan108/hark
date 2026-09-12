@@ -76,7 +76,7 @@ export interface TrackInput {
   clientEventId?: string | null;
   anonymousId?: string | null;
   sessionId?: string | null;
-  surface?: "web" | "ios" | "server" | null;
+  surface?: "web" | "android" | "server" | null;
   userId?: string | null;
   serviceId?: string | null;
   deviceId?: string | null;

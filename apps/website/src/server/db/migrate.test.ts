@@ -46,7 +46,9 @@ beforeAll(() => {
   expect(newEntry, "expected the project inbox migration in the journal").toBeDefined();
   const legacyJournal = {
     ...journal,
-    entries: journal.entries.filter((entry) => entry.tag !== NEW_MIGRATION_TAG),
+    entries: journal.entries.filter(
+      (entry) => entry.idx < (newEntry?.idx ?? Number.MAX_SAFE_INTEGER),
+    ),
   };
 
   // Phase 1: the world before the deploy.
@@ -161,5 +163,16 @@ describe("project inbox migration on a populated database", () => {
       "event_project_created_at_idx",
       "event_unread_idx",
     ]);
+  });
+
+  it("adds nullable Android registration fields without changing legacy devices", () => {
+    const columns = sqlite.prepare("pragma table_info(device)").all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "fcm_token",
+        "notification_schema_version",
+        "promoted_notifications_capable",
+      ]),
+    );
   });
 });

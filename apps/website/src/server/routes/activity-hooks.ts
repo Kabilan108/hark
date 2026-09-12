@@ -31,6 +31,7 @@ import {
   findBlockingDeliveries,
   liveKeyedActivity,
   replaceBlockingDeliveries,
+  retryEndDelivery,
   toLiveActivityDto,
   trackActivityOutcome,
 } from "./activities";
@@ -198,7 +199,7 @@ async function eligibleDevices(
       and(
         eq(device.userId, service.userId),
         eq(device.active, true),
-        eq(device.platform, "ios"),
+        eq(device.platform, "android"),
         ...(requestedIds ? [inArray(device.id, requestedIds)] : []),
       ),
     )
@@ -206,17 +207,14 @@ async function eligibleDevices(
   if (requestedIds && targets.length !== requestedIds.length) {
     return { error: "Invalid device selection", status: 400 as const };
   }
-  if (!requestedIds && billing.limits.devices !== null)
+  targets = targets.filter(
+    (target) =>
+      target.fcmToken && target.liveActivitySchemaVersion === LIVE_ACTIVITY_SCHEMA_VERSION,
+  );
+  if (!requestedIds && billing.limits.devices !== null) {
     targets = targets.slice(0, billing.limits.devices);
-  return {
-    targets: targets.filter(
-      (target) =>
-        target.liveActivityPushToStartTokenCiphertext &&
-        target.liveActivitySchemaVersion === LIVE_ACTIVITY_SCHEMA_VERSION &&
-        (target.liveActivityTokenEnvironment === "sandbox" ||
-          target.liveActivityTokenEnvironment === "production"),
-    ),
-  };
+  }
+  return { targets };
 }
 
 async function deliveriesFor(activityId: string): Promise<DeliveryRow[]> {
@@ -396,7 +394,7 @@ export const activityHooksRoute = new Hono()
               activityId,
               deviceId: target.id,
               status: "pending",
-              environment: target.liveActivityTokenEnvironment as "sandbox" | "production",
+              environment: "fcm",
               schemaVersion: LIVE_ACTIVITY_SCHEMA_VERSION,
               createdAt: now,
               updatedAt: now,
@@ -482,7 +480,7 @@ export const activityHooksRoute = new Hono()
       response(row ?? created.row, result, {
         ...(parsed.data.replace ? { replaced } : {}),
         ...(result.accepted === 0
-          ? { message: "No Live Activity-capable iOS devices accepted the request." }
+          ? { message: "No Live Update-capable Android devices accepted the request." }
           : {}),
       }),
       201,
@@ -695,17 +693,10 @@ export const activityHooksRoute = new Hono()
       );
     }
     if (replay && !replay.conflict) {
-      return c.json(
-        response(
-          replay.row,
-          {
-            accepted: replay.operation.acceptedCount,
-            failed: replay.operation.failedCount,
-            errors: [],
-          },
-          { idempotent: true },
-        ),
-      );
+      const result = await retryEndDelivery(replay.row, replay.operation, {
+        requesterServiceId: service.id,
+      });
+      return c.json(response(replay.row, result, { idempotent: true }));
     }
     const current = await ownedActivity(service.id, c.req.param("identifier"));
     if (!current) return c.json({ ok: false, error: "Live Activity not found" }, 404);
@@ -788,17 +779,10 @@ export const activityHooksRoute = new Hono()
         );
       }
       if (raced && !raced.conflict) {
-        return c.json(
-          response(
-            raced.row,
-            {
-              accepted: raced.operation.acceptedCount,
-              failed: raced.operation.failedCount,
-              errors: [],
-            },
-            { idempotent: true },
-          ),
-        );
+        const result = await retryEndDelivery(raced.row, raced.operation, {
+          requesterServiceId: service.id,
+        });
+        return c.json(response(raced.row, result, { idempotent: true }));
       }
       throw error;
     }

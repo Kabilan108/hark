@@ -1,34 +1,6 @@
 import { Link } from "react-router";
-import { AppleButton } from "../components/AppleButton";
 import { GoogleButton } from "../components/GoogleButton";
-import { type NotificationItem, NotificationStack } from "../components/NotificationStack";
-import { signInWithApple, signInWithGoogle, useSession } from "../lib/auth";
-
-const welcomeNotifications: NotificationItem[] = [
-  {
-    title: "Welcome to Hark",
-    image: "/welcome.svg",
-    description: "Hark makes it easy to notify yourself of your own services.",
-  },
-  {
-    title: "Webhooks & agents",
-    image: "/agent.png",
-    description: "Use webhooks or an agent to send custom messages.",
-  },
-  {
-    title: "Make it yours",
-    image: "https://pbs.twimg.com/profile_images/2070959207273082880/HZoVBuA2_400x400.jpg",
-    description: "Custom titles, images, and descriptions.",
-  },
-  {
-    title: "Get started",
-    image: "/get-started.svg",
-    description: "Click here to get started.",
-    link: "/docs",
-  },
-];
-
-const showNotificationMock = false;
+import { signInWithGoogle, useSession } from "../lib/auth";
 
 export function Landing() {
   const { data: session, isPending } = useSession();
@@ -66,39 +38,38 @@ export function Landing() {
               From webhook to lock screen.
             </h1>
             <p className="mt-5 max-w-md text-base leading-relaxed text-pretty text-ink-subtle sm:text-lg">
-              Hark turns events from webhooks, coding agents, scripts, and CI into native iPhone
-              notifications and Live Activities.
+              Hark turns events from webhooks, coding agents, scripts, and CI into Android
+              notifications and live progress updates, delivered directly through FCM.
             </p>
             {!session ? (
               <div className="mt-8 hidden flex-wrap gap-3 lg:flex">
-                <AppleButton onClick={() => void signInWithApple()} disabled={isPending} />
                 <GoogleButton onClick={() => void signInWithGoogle()} disabled={isPending} />
               </div>
             ) : null}
           </section>
           <div className="flex justify-center">
-            {showNotificationMock ? (
-              <NotificationStack items={welcomeNotifications} interval={800} />
-            ) : (
-              <div className="hark-demo-stage" aria-hidden="true">
-                <video
-                  className="hark-demo-video"
-                  autoPlay
-                  loop
-                  muted
-                  playsInline
-                  preload="auto"
-                  disablePictureInPicture
-                >
-                  <source src="/hark-demo.mov?v=2" type='video/quicktime; codecs="hvc1"' />
-                  <source src="/hark-demo.webm?v=2" type='video/webm; codecs="vp9"' />
-                </video>
+            <div className="w-full max-w-md rounded-[28px] border border-line bg-surface p-6 shadow-xl">
+              <div className="flex items-center justify-between text-xs text-ink-faint">
+                <span>Hark · CI</span>
+                <span>now</span>
               </div>
-            )}
+              <p className="mt-4 text-base font-semibold text-ink">Deploy #184</p>
+              <p className="mt-1 text-sm text-ink-subtle">Tests passed. Ready to ship.</p>
+              <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-surface-muted">
+                <div className="h-full w-4/5 rounded-full bg-accent" />
+              </div>
+              <div className="mt-5 flex gap-2 text-xs font-medium">
+                <span className="rounded-full bg-accent-soft px-3 py-1.5 text-accent-text">
+                  Approve
+                </span>
+                <span className="rounded-full bg-surface-muted px-3 py-1.5 text-ink-muted">
+                  Deny
+                </span>
+              </div>
+            </div>
           </div>
           {!session ? (
             <div className="flex flex-wrap justify-center gap-3 lg:hidden">
-              <AppleButton onClick={() => void signInWithApple()} disabled={isPending} />
               <GoogleButton onClick={() => void signInWithGoogle()} disabled={isPending} />
             </div>
           ) : null}

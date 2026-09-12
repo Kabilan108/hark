@@ -45,21 +45,17 @@ export function Privacy() {
     <LegalLayout title="Privacy Policy">
       <Section title="Overview">
         <p>
-          Hark is operated by Ryan Vogel. This policy explains the information Hark processes to
-          deliver webhook notifications through the website and iOS app. Hark does not sell personal
-          information or use it for targeted advertising.
+          Hark is self-hosted software. This policy explains the information a Hark deployment
+          processes to deliver webhook notifications through its website and Android app. Hark does
+          not sell personal information or use it for targeted advertising.
         </p>
       </Section>
 
       <Section title="Information we process">
         <ul className="list-disc space-y-2 pl-5">
           <li>
-            Your Google or Apple account identifier, name, email address, and profile image when
-            provided by the sign-in service. Apple may provide a private relay email address.
-          </li>
-          <li>
-            Encrypted Apple refresh tokens used only to revoke Sign in with Apple authorization when
-            you delete your account.
+            Your Google account identifier, name, email address, and profile image when provided by
+            Google sign-in.
           </li>
           <li>
             Service settings you create, including titles, image URLs, destination URLs, secret
@@ -70,8 +66,8 @@ export function Privacy() {
             images, destinations, idempotency keys, timestamps, read state, and delivery results.
           </li>
           <li>
-            Device information needed for delivery, including Expo and APNs push tokens, device
-            name, platform, and last registration time.
+            Device information needed for delivery, including the FCM registration token, device
+            name, platform, capabilities, and last registration time.
           </li>
           <li>
             Agent access-token names, scopes, identifying prefixes, hashes, expiry and usage times.
@@ -82,14 +78,9 @@ export function Privacy() {
             identity, responding device, and response timestamps.
           </li>
           <li>
-            Live Activity task titles, status text, optional detail and progress, expiry and update
-            history, requesting token identity, and encrypted ActivityKit delivery tokens. Private
-            mode replaces task content with generic text on the Lock Screen but does not remove the
-            task content from Hark's encrypted network and account-scoped processing.
-          </li>
-          <li>
-            Subscription status and billing identifiers when you choose a paid plan. Payment-card
-            details are collected and handled by Stripe, not stored by Hark.
+            Live Update task titles, status text, optional detail and progress, expiry and update
+            history, and requesting token identity. Private mode replaces task content with generic
+            text on the lock screen, but the Hark server still processes the task content.
           </li>
           <li>Limited technical logs used to secure, operate, and troubleshoot the service.</li>
           <li>
@@ -108,30 +99,27 @@ export function Privacy() {
           We use this information to authenticate your account, create and secure webhook endpoints,
           deliver notifications, show delivery activity, prevent duplicate or abusive requests,
           deliver requested interactions and return your response to the authorized agent, start and
-          update Live Activities you authorize, provide support, and maintain the reliability and
+          update Live Updates you authorize, provide support, and maintain the reliability and
           security of Hark.
         </p>
       </Section>
 
       <Section title="Service providers">
         <p>
-          Hark relies on Google and Apple for authentication, Expo and Apple for push delivery and
-          app distribution, Autumn and Stripe for optional web billing, and hosting infrastructure
-          for the website, API, and database. These providers process information only as needed to
-          provide their services and under their own privacy terms.
+          Hark relies on Google for authentication and Firebase Cloud Messaging, plus the
+          infrastructure selected by the deployment operator for the website, API, and database.
+          Hark sends pushes directly through FCM. It does not use Expo Push Service or EAS.
         </p>
       </Section>
 
       <Section title="Retention and deletion">
         <p>
           We retain account and service data while your account is active. Webhook and agent
-          notification content — including titles, bodies, summaries, projects, and read state —
+          notification content, including titles, bodies, summaries, projects, and read state,
           persists in your inbox and is not expired on a schedule; it is removed when your account
           is deleted. You can permanently delete your account inside the Hark app. Deletion removes
           your services, devices, projects, notifications, and activity from the active database.
-          For accounts using Apple, Hark first asks Apple to revoke stored authorization grants;
-          deletion stops and reports an error if that revocation cannot be confirmed. Limited backup
-          copies may remain temporarily until rotated.
+          Limited backup copies may remain until the deployment operator rotates them.
         </p>
       </Section>
 
@@ -153,16 +141,7 @@ export function Privacy() {
       </Section>
 
       <Section title="Contact">
-        <p>
-          Questions or privacy requests can be sent to{" "}
-          <a
-            className="text-accent-text underline underline-offset-2"
-            href="mailto:ryan@mandarin3d.com"
-          >
-            ryan@mandarin3d.com
-          </a>
-          .
-        </p>
+        <p>Send privacy requests to the operator of your Hark deployment.</p>
       </Section>
     </LegalLayout>
   );
@@ -219,29 +198,17 @@ export function Terms() {
         </p>
       </Section>
 
-      <Section title="Paid plans">
-        <p>
-          Hark Pro is an optional subscription purchased on the Hark website and billed in advance
-          through Autumn and Stripe. The current price and billing interval are shown before
-          checkout. Subscriptions renew automatically until canceled. You can manage or cancel a
-          subscription from the web dashboard; cancellation takes effect at the end of the current
-          paid period unless stated otherwise. Fees are non-refundable except where required by law.
-          We may change future pricing with advance notice, but changes do not apply retroactively
-          to an already-paid period.
-        </p>
-      </Section>
-
       <Section title="Third-party services">
         <p>
-          Hark depends on services provided by Google, Expo, Apple, Autumn, Stripe, and hosting
-          providers. Their availability and terms are outside Hark's control, and integrations may
-          stop working if those services change.
+          Hark depends on Google services and the infrastructure chosen by the deployment operator.
+          Their availability and terms are outside Hark's control, and integrations may stop working
+          if those services change.
         </p>
       </Section>
 
       <Section title="Availability and warranties">
         <p>
-          Hark is provided “as is” and “as available.” Push delivery is not guaranteed, may be
+          Hark is provided "as is" and "as available." Push delivery is not guaranteed, may be
           delayed or duplicated, and can be affected by device settings and third-party services. To
           the extent permitted by law, Hark disclaims implied warranties and is not liable for
           indirect, incidental, special, or consequential damages.
@@ -257,16 +224,7 @@ export function Terms() {
       </Section>
 
       <Section title="Contact">
-        <p>
-          Questions about these terms can be sent to{" "}
-          <a
-            className="text-accent-text underline underline-offset-2"
-            href="mailto:ryan@mandarin3d.com"
-          >
-            ryan@mandarin3d.com
-          </a>
-          .
-        </p>
+        <p>Send questions about these terms to the operator of your Hark deployment.</p>
       </Section>
     </LegalLayout>
   );

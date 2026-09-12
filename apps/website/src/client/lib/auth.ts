@@ -16,15 +16,3 @@ export function signInWithGoogle(callbackURL = "/dashboard"): Promise<unknown> {
     callbackURL,
   });
 }
-
-export function signInWithApple(callbackURL = "/dashboard"): Promise<unknown> {
-  markAuthPending("apple");
-  trackWebEvent("auth_started", {
-    path: window.location.pathname,
-    properties: { provider: "apple" },
-  });
-  return authClient.signIn.social({
-    provider: "apple",
-    callbackURL,
-  });
-}

@@ -52,6 +52,7 @@ function harkEnvironment() {
     ...(process.env.USER ? { USER: process.env.USER } : {}),
     ...(process.env.TMPDIR ? { TMPDIR: process.env.TMPDIR } : {}),
     ...(process.env.HARK_CONFIG ? { HARK_CONFIG: process.env.HARK_CONFIG } : {}),
+    ...(process.env.HARK_API_URL ? { HARK_API_URL: process.env.HARK_API_URL } : {}),
     ...(process.env.XDG_CONFIG_HOME ? { XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME } : {}),
     ...(process.env.APPDATA ? { APPDATA: process.env.APPDATA } : {}),
   };

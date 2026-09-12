@@ -1,0 +1,6 @@
+{
+  "platforms": ["android"],
+  "android": {
+    "modules": ["dev.kabilan.hark.android.HarkAndroidModule"]
+  }
+}

@@ -19,19 +19,6 @@ vi.mock("expo-secure-store", () => ({
   },
 }));
 
-vi.mock("expo-notifications", () => ({
-  DEFAULT_ACTION_IDENTIFIER: "expo.modules.notifications.actions.DEFAULT",
-  setNotificationCategoryAsync: vi.fn(),
-}));
-
-vi.mock("expo-router", () => ({ router: { push: vi.fn() } }));
-
-vi.mock("react-native", () => ({
-  Linking: { openURL: vi.fn(async () => undefined) },
-  Alert: { alert: vi.fn() },
-}));
-
-vi.mock("./analytics", () => ({ trackAppEvent: vi.fn() }));
 vi.mock("./auth", () => ({ getCookie: () => state.cookie }));
 vi.mock("./api", () => ({
   ApiError: class ApiError extends Error {
@@ -54,58 +41,15 @@ vi.mock("./api", () => ({
   },
 }));
 
-import { router } from "expo-router";
-import { Linking } from "react-native";
 import {
   clearInteractionResponses,
   DEVICE_ID_KEY,
   flushInteractionResponses,
-  handleNotificationResponse,
   submitInteractionResponse,
 } from "./interactions";
 
 const QUEUE_KEY = "hark.interaction.responseQueue.v1";
 const DIGEST = "a".repeat(64);
-
-function approvalResponse(interactionId: string) {
-  return {
-    actionIdentifier: "HARK_APPROVE",
-    notification: {
-      request: { content: { data: { interactionId, actionDigest: DIGEST } } },
-    },
-  } as never;
-}
-
-function credentialResponse(interactionId: string) {
-  return {
-    actionIdentifier: "HARK_APPROVE",
-    notification: {
-      request: {
-        content: {
-          data: { interactionId, actionDigest: DIGEST, responseToken: "r".repeat(43) },
-        },
-      },
-    },
-  } as never;
-}
-
-function defaultResponse(url: string) {
-  return {
-    actionIdentifier: "expo.modules.notifications.actions.DEFAULT",
-    notification: {
-      request: { content: { data: { url } } },
-    },
-  } as never;
-}
-
-function defaultResponseWithData(data: Record<string, unknown>) {
-  return {
-    actionIdentifier: "expo.modules.notifications.actions.DEFAULT",
-    notification: {
-      request: { content: { data } },
-    },
-  } as never;
-}
 
 afterEach(async () => {
   vi.clearAllMocks();
@@ -114,65 +58,6 @@ afterEach(async () => {
   state.submissions.length = 0;
   await clearInteractionResponses();
   state.store.clear();
-});
-
-describe("notification tap destinations", () => {
-  it.each([
-    "https://example.com/builds/48",
-    "example-app://builds/48",
-    "shortcuts://run-shortcut?name=Process%20Alert&input=text&text=build%2048",
-  ])("opens a validated destination: %s", async (url) => {
-    await handleNotificationResponse(defaultResponse(url));
-    expect(Linking.openURL).toHaveBeenCalledWith(url);
-  });
-
-  it.each(["javascript:alert(1)", "data:text/html,x", "file:///etc/passwd", "not a url"])(
-    "ignores an unsafe or malformed destination: %s",
-    async (url) => {
-      await handleNotificationResponse(defaultResponse(url));
-      expect(Linking.openURL).not.toHaveBeenCalled();
-    },
-  );
-
-  it("keeps the custom URL tap behavior even when an eventId is present", async () => {
-    await handleNotificationResponse(
-      defaultResponseWithData({
-        url: "https://example.com/builds/48",
-        eventId: "evt_1",
-      }),
-    );
-    expect(Linking.openURL).toHaveBeenCalledWith("https://example.com/builds/48");
-    expect(router.push).not.toHaveBeenCalled();
-  });
-
-  it("navigates to the detail route when there is no URL and no interaction", async () => {
-    await handleNotificationResponse(defaultResponseWithData({ eventId: "evt_1" }));
-    expect(Linking.openURL).not.toHaveBeenCalled();
-    expect(router.push).toHaveBeenCalledWith({
-      pathname: "/notification/[id]",
-      params: { id: "event:evt_1" },
-    });
-
-    await handleNotificationResponse(defaultResponseWithData({ eventId: "anot_2" }));
-    expect(router.push).toHaveBeenLastCalledWith({
-      pathname: "/notification/[id]",
-      params: { id: "notification:anot_2" },
-    });
-  });
-
-  it("never navigates for interaction taps or empty payloads", async () => {
-    await handleNotificationResponse(
-      defaultResponseWithData({
-        interactionId: "int_1",
-        actionDigest: DIGEST,
-        eventId: "evt_1",
-      }),
-    );
-    await handleNotificationResponse(defaultResponseWithData({}));
-    await handleNotificationResponse(defaultResponseWithData({ eventId: "" }));
-    expect(router.push).not.toHaveBeenCalled();
-    expect(Linking.openURL).not.toHaveBeenCalled();
-  });
 });
 
 describe("interaction response queue", () => {
@@ -191,24 +76,8 @@ describe("interaction response queue", () => {
     ]);
   });
 
-  it("submits with a response credential without a login cookie", async () => {
-    state.cookie = undefined;
-    state.store.set(DEVICE_ID_KEY, "dev_1");
-    await handleNotificationResponse(credentialResponse("int_credential"));
-    expect(state.submissions).toEqual([
-      {
-        id: "int_credential",
-        input: {
-          action: "approve",
-          actionDigest: DIGEST,
-          responseToken: "r".repeat(43),
-          deviceId: "dev_1",
-        },
-      },
-    ]);
-  });
   it("preserves a response until registration provides a device ID", async () => {
-    await handleNotificationResponse(approvalResponse("int_upgrade"));
+    await submitInteractionResponse("int_upgrade", { action: "approve", actionDigest: DIGEST });
     expect(state.submissions).toHaveLength(0);
     expect(JSON.parse(state.store.get(QUEUE_KEY) ?? "[]")).toEqual([
       {
@@ -238,9 +107,15 @@ describe("interaction response queue", () => {
           })
         : Promise.resolve();
 
-    const first = handleNotificationResponse(approvalResponse("int_first"));
+    const first = submitInteractionResponse("int_first", {
+      action: "approve",
+      actionDigest: DIGEST,
+    });
     await vi.waitFor(() => expect(state.submissions).toHaveLength(1));
-    const second = handleNotificationResponse(approvalResponse("int_second"));
+    const second = submitInteractionResponse("int_second", {
+      action: "approve",
+      actionDigest: DIGEST,
+    });
     await vi.waitFor(() => expect(JSON.parse(state.store.get(QUEUE_KEY) ?? "[]")).toHaveLength(2));
     releaseFirst?.();
     await Promise.all([first, second]);
@@ -251,7 +126,7 @@ describe("interaction response queue", () => {
 
   it("coalesces concurrent flushes", async () => {
     state.cookie = undefined;
-    await handleNotificationResponse(approvalResponse("int_once"));
+    await submitInteractionResponse("int_once", { action: "approve", actionDigest: DIGEST });
     state.cookie = "session";
     state.store.set(DEVICE_ID_KEY, "dev_1");
 

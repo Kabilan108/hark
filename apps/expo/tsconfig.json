@@ -13,5 +13,5 @@
     "src/**/*.tsx",
     "app.config.ts"
   ],
-  "exclude": ["node_modules", "ios"]
+  "exclude": ["node_modules", "android"]
 }

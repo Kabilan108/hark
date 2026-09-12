@@ -2,15 +2,13 @@ import type { PricingPlanDto, PricingPlansDto } from "@hark/contracts";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { staticPricingPlans } from "../../shared/pricing";
-import { AppleButton } from "../components/AppleButton";
 import { GoogleButton } from "../components/GoogleButton";
 import { api } from "../lib/api";
-import { signInWithApple, signInWithGoogle, useSession } from "../lib/auth";
+import { signInWithGoogle, useSession } from "../lib/auth";
 
 const numberFormat = new Intl.NumberFormat("en-US");
 
-/** Pro capabilities that are plan-gated in the API rather than metered in Autumn. */
-const PRO_EXTRAS = ["Interactive responses", "Live Activities", "Response callbacks"];
+const INCLUDED_FEATURES = ["Interactive responses", "Live Updates", "Response callbacks"];
 
 export function Pricing() {
   const { data: session, isPending } = useSession();
@@ -73,8 +71,8 @@ export function Pricing() {
       <main className="mx-auto w-full max-w-3xl flex-1 px-6 pb-24">
         <h1 className="text-4xl font-semibold text-balance">Pricing</h1>
         <p className="text-ink-subtle mt-4 max-w-xl text-base leading-relaxed">
-          Start free with one iPhone and 10,000 notifications a month. Upgrade when your webhooks
-          outgrow it.
+          Self-host Hark with every feature enabled. Hark does not charge a subscription; you cover
+          the infrastructure and Firebase usage for your deployment.
         </p>
 
         {failed ? (
@@ -120,13 +118,13 @@ export function Pricing() {
         {checkoutError ? <p className="text-danger mt-4 text-sm">{checkoutError}</p> : null}
 
         <p className="text-ink-faint mt-10 text-xs">
-          Prices in USD. Cancel anytime from the dashboard. Notifications, interactive responses,
-          and Live Activity updates share the same monthly allowance.
+          Direct FCM delivery requires your own Firebase project and service account. Expo Push
+          Service and EAS are not used.
         </p>
       </main>
 
       <footer className="text-ink-faint mx-auto flex w-full max-w-3xl items-center justify-between px-6 py-6 text-xs">
-        <span>Hark · webhook → iPhone, nothing else in between.</span>
+        <span>Hark · self-hosted webhook → Android.</span>
         <nav className="flex items-center gap-3" aria-label="Legal">
           <Link className="hover:text-ink-muted transition" to="/privacy">
             Privacy
@@ -143,32 +141,31 @@ export function Pricing() {
 function SignInButtons({ disabled }: { disabled: boolean }) {
   return (
     <div className="flex flex-col items-start gap-3">
-      <AppleButton onClick={() => void signInWithApple()} disabled={disabled} />
       <GoogleButton onClick={() => void signInWithGoogle()} disabled={disabled} />
     </div>
   );
 }
 
 function PlanCard({ plan, children }: { plan: PricingPlanDto; children: React.ReactNode }) {
-  const pro = plan.priceMonthly > 0;
+  const featured = plan.id === "self_hosted";
   const rows = [
     plan.notificationsPerMonth === null
       ? "Unlimited notifications"
       : `${numberFormat.format(plan.notificationsPerMonth)} notifications per month`,
     plan.devices === null
-      ? "Unlimited iPhones"
-      : `${plan.devices} iPhone${plan.devices === 1 ? "" : "s"}`,
+      ? "Unlimited Android devices"
+      : `${plan.devices} Android device${plan.devices === 1 ? "" : "s"}`,
     `${numberFormat.format(plan.servicePerMinute)} requests/minute per service`,
     `${numberFormat.format(plan.accountPerMinute)} requests/minute per account`,
     ...(plan.deviceRouting ? ["Device routing"] : []),
-    ...(pro ? PRO_EXTRAS : []),
+    ...INCLUDED_FEATURES,
   ];
 
   return (
     <section
       aria-label={`${plan.name} plan`}
       className={`flex flex-col rounded-2xl border p-6 ${
-        pro ? "border-accent/40 bg-accent-wash" : "border-line"
+        featured ? "border-accent/40 bg-accent-wash" : "border-line"
       }`}
     >
       <div className="flex items-baseline justify-between">

@@ -1,9 +1,4 @@
-import { PRO_PRICE_MONTHLY } from "./pricing";
-
-export const SITE_URL = "https://hark.ryan.ceo";
-export const SOCIAL_IMAGE_URL = `${SITE_URL}/ogimage.png`;
-export const DEMO_POSTER_URL = `${SITE_URL}/notifications-demo-poster.jpg`;
-export const DEMO_VIDEO_URL = `${SITE_URL}/notifications-demo.mp4`;
+export const SITE_URL = "https://sietch.sole-pierce.ts.net:8443";
 
 export type SeoPage =
   | "home"
@@ -29,48 +24,45 @@ export interface PageSeo {
 export const PAGE_SEO: Record<SeoPage, PageSeo> = {
   home: {
     path: "/",
-    title: "Hark — Webhooks to iPhone Notifications",
+    title: "Hark — Self-hosted Android Notifications",
     description:
-      "Turn webhooks from CI, coding agents, scripts, and monitors into source-branded iPhone notifications, approvals, replies, and Live Activities.",
+      "Send Android notifications, approvals, replies, and live progress updates from webhooks and coding agents through your own Hark server.",
     index: true,
   },
   docs: {
     path: "/docs",
-    title: "Hark API Docs — Notifications, Approvals, and Live Activities",
+    title: "Hark API Docs — Android Notifications and Live Updates",
     description:
-      "Use the Hark webhook API and CLI to send iPhone notifications, request approvals or replies, and update Live Activities from agents and automation.",
+      "Use the Hark webhook API and CLI to send Android notifications, request approvals or replies, and update ongoing tasks through direct FCM delivery.",
     index: true,
     markdownAlternate: `${SITE_URL}/docs.md`,
   },
   pricing: {
     path: "/pricing",
-    title: "Hark Pricing — Free and Pro iPhone Notifications",
+    title: "Hark Pricing — Self-hosted Android Notifications",
     description:
-      "Compare Hark Free and Pro plans for webhook notifications, multiple iPhones, device routing, interactive responses, and Live Activities.",
+      "Self-host Hark with Android notifications, device routing, interactive responses, callbacks, and Live Updates included.",
     index: true,
   },
   launched: {
     path: "/a/launched",
-    title: "Hark Is Live on the App Store",
+    title: "Hark for Android — Self-hosted Notifications",
     description:
-      "Install or update Hark for iPhone from the App Store, with direct support if anything goes wrong.",
+      "Run Hark's Android app with your own Node and SQLite backend and direct Firebase Cloud Messaging delivery.",
     index: true,
-    type: "article",
-    publishedTime: "2026-08-01T12:00:00-04:00",
-    modifiedTime: "2026-08-01T12:00:00-04:00",
   },
   privacy: {
     path: "/privacy",
     title: "Privacy Policy — Hark",
     description:
-      "How Hark processes account, webhook, notification, device, interaction, Live Activity, and billing information.",
+      "How a self-hosted Hark deployment processes account, webhook, notification, device, interaction, and Live Update information.",
     index: true,
   },
   terms: {
     path: "/terms",
     title: "Terms of Service — Hark",
     description:
-      "The terms governing Hark webhook notifications, agent interactions, and paid plans.",
+      "The terms governing a self-hosted Hark deployment, webhook notifications, and agent interactions.",
     index: true,
   },
   dashboard: {
@@ -110,10 +102,10 @@ export function seoPageForPath(pathname: string): SeoPage | null {
 }
 
 const provider = {
-  "@type": "Person",
+  "@type": "Organization",
   "@id": `${SITE_URL}/#provider`,
-  name: "Ryan Vogel",
-  url: "https://github.com/R44VC0RP",
+  name: "Hark deployment",
+  url: SITE_URL,
 };
 
 /** Factual entities visible on the home page. Avoids ratings, reviews, and unsupported claims. */
@@ -135,49 +127,28 @@ export function homeStructuredData(): Record<string, unknown> {
         "@type": ["SoftwareApplication", "MobileApplication"],
         "@id": `${SITE_URL}/#app`,
         name: "Hark",
-        alternateName: "Hark for iPhone",
+        alternateName: "Hark for Android",
         url: `${SITE_URL}/`,
         description: PAGE_SEO.home.description,
         applicationCategory: "CommunicationApplication",
-        operatingSystem: "iOS",
-        image: SOCIAL_IMAGE_URL,
-        screenshot: DEMO_POSTER_URL,
-        downloadUrl: "https://apps.apple.com/us/app/hark-developer-notifications/id6794121509",
+        operatingSystem: "Android",
         softwareHelp: `${SITE_URL}/docs`,
         provider: { "@id": `${SITE_URL}/#provider` },
-        sameAs: ["https://github.com/R44VC0RP/hark", "https://skills.sh/r44vc0rp/hark/hark"],
         featureList: [
-          "Webhook to iPhone notifications",
+          "Webhook to Android notifications",
           "Agent approval and text reply requests",
-          "Live Activities on the Lock Screen and Dynamic Island",
+          "Ongoing progress notifications and supported Android Live Updates",
           "Scoped CLI access tokens",
         ],
         offers: [
           {
             "@type": "Offer",
-            name: "Hark Free",
+            name: "Hark self-hosted",
             price: "0",
             priceCurrency: "USD",
             url: `${SITE_URL}/pricing`,
           },
-          {
-            "@type": "Offer",
-            name: "Hark Pro",
-            price: String(PRO_PRICE_MONTHLY),
-            priceCurrency: "USD",
-            url: `${SITE_URL}/pricing`,
-          },
         ],
-      },
-      {
-        "@type": "VideoObject",
-        "@id": `${SITE_URL}/#demo-video`,
-        name: "Hark iPhone notification demo",
-        description: "A demonstration of Hark delivering project notifications to an iPhone.",
-        thumbnailUrl: DEMO_POSTER_URL,
-        uploadDate: "2026-07-23T19:23:02-04:00",
-        duration: "PT7.466S",
-        contentUrl: DEMO_VIDEO_URL,
       },
       {
         "@type": "WebPage",
@@ -187,7 +158,6 @@ export function homeStructuredData(): Record<string, unknown> {
         description: PAGE_SEO.home.description,
         isPartOf: { "@id": `${SITE_URL}/#website` },
         mainEntity: { "@id": `${SITE_URL}/#app` },
-        video: { "@id": `${SITE_URL}/#demo-video` },
         inLanguage: "en-US",
       },
     ],
@@ -242,7 +212,6 @@ export function structuredDataForPage(page: SeoPage): Record<string, unknown> | 
       description: seo.description,
       url,
       mainEntityOfPage: { "@id": `${url}#webpage` },
-      image: SOCIAL_IMAGE_URL,
       author: { "@id": `${SITE_URL}/#provider` },
       publisher: { "@id": `${SITE_URL}/#provider` },
       datePublished: seo.publishedTime,

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd -- "$script_dir/.." && pwd)"
+env_file="${HARK_ENV_FILE:-$repo_root/.env}"
+[[ -r "$env_file" ]] || { printf 'Missing backend environment file: %s\n' "$env_file" >&2; exit 1; }
+cd "$repo_root/apps/website"
+[[ -f dist/server/index.js ]] || { printf 'Build @hark/website before starting the backend\n' >&2; exit 1; }
+exec node --env-file="$env_file" dist/server/index.js

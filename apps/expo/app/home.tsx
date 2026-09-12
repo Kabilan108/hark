@@ -1,16 +1,14 @@
 import type { EventDto } from "@hark/contracts";
-import Constants from "expo-constants";
-import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import { Redirect, useRouter } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import { StatusBar } from "expo-status-bar";
-import { SymbolView } from "expo-symbols";
+import { configure, openNotificationSettings } from "hark-android";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
+  AppState,
   Image,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -20,21 +18,15 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { trackAppEvent, trackOnboardingCompleted } from "../src/lib/analytics";
 import { api } from "../src/lib/api";
-import { authClient, useSession } from "../src/lib/auth";
-import {
-  clearInteractionResponses,
-  DEVICE_ID_KEY,
-  flushInteractionResponses,
-  registerInteractionCategories,
-} from "../src/lib/interactions";
-import { refreshLiveActivityTokenSync } from "../src/lib/live-activities";
+import { API_URL, authClient, useSession } from "../src/lib/auth";
+import { DEVICE_ID_KEY, FCM_TOKEN_KEY, registerCurrentDevice } from "../src/lib/device";
+import { clearInteractionResponses, flushInteractionResponses } from "../src/lib/interactions";
+import { PREVIEW_MODE } from "../src/lib/preview";
+import { SymbolView } from "../src/lib/symbol-view";
 import { colors, fonts, tightTracking } from "../src/lib/theme";
 
 type PermissionState = "unknown" | "undetermined" | "granted" | "denied";
 type RegistrationState = "idle" | "working" | "registered" | "error";
-
-const EXPO_TOKEN_KEY = "hark.device.expoPushToken";
-const APNS_TOKEN_KEY = "hark.device.apnsToken";
 
 export default function HomeScreen() {
   const { data: session, isPending } = useSession();
@@ -42,7 +34,7 @@ export default function HomeScreen() {
 
   const [permission, setPermission] = useState<PermissionState>("unknown");
   const [registration, setRegistration] = useState<RegistrationState>("idle");
-  const [expoPushToken, setExpoPushToken] = useState<string | null>(null);
+  const [fcmToken, setFcmToken] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const [events, setEvents] = useState<EventDto[] | null>(null);
   const [storageHydrated, setStorageHydrated] = useState(false);
@@ -55,13 +47,21 @@ export default function HomeScreen() {
 
   useEffect(() => {
     void refreshPermission();
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") void refreshPermission();
+    });
+    return () => subscription.remove();
   }, [refreshPermission]);
 
   useEffect(() => {
-    void SecureStore.getItemAsync(EXPO_TOKEN_KEY)
-      .then((storedExpoToken) => {
-        if (storedExpoToken) {
-          setExpoPushToken(storedExpoToken);
+    void Promise.all([
+      SecureStore.getItemAsync(FCM_TOKEN_KEY),
+      SecureStore.getItemAsync(DEVICE_ID_KEY),
+    ])
+      .then(([storedFcmToken, storedDeviceId]) => {
+        if (storedDeviceId) void configure({ backendOrigin: API_URL, deviceId: storedDeviceId });
+        if (storedFcmToken && storedDeviceId) {
+          setFcmToken(storedFcmToken);
           setRegistration("registered");
         }
       })
@@ -70,9 +70,7 @@ export default function HomeScreen() {
 
   const requestPermission = async () => {
     void trackAppEvent("notification_permission_prompted", { path: "/home" });
-    const result = await Notifications.requestPermissionsAsync({
-      ios: { allowAlert: true, allowBadge: true, allowSound: true },
-    });
+    const result = await Notifications.requestPermissionsAsync();
     setPermission(result.granted ? "granted" : result.canAskAgain ? "undetermined" : "denied");
     void trackAppEvent("notification_permission_resolved", {
       path: "/home",
@@ -88,45 +86,8 @@ export default function HomeScreen() {
     if (!preserveReadyState) setRegistration("working");
     setLastError(null);
     try {
-      if (!Device.isDevice) {
-        throw new Error("Push notifications require a physical iPhone.");
-      }
-      const projectId =
-        (Constants.expoConfig?.extra?.eas as { projectId?: string } | undefined)?.projectId ??
-        process.env.EXPO_PUBLIC_EAS_PROJECT_ID;
-      const expoToken = (
-        await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined)
-      ).data;
-
-      let apns: string | null = null;
-      try {
-        const nativeToken = await Notifications.getDevicePushTokenAsync();
-        apns = typeof nativeToken.data === "string" ? nativeToken.data : null;
-      } catch {
-        // APNs token is optional; delivery uses the Expo push token.
-      }
-
-      await registerInteractionCategories();
-      const registered = await api.registerDevice({
-        expoPushToken: expoToken,
-        ...(apns ? { apnsToken: apns } : {}),
-        platform: "ios",
-        deviceName: Device.deviceName ?? undefined,
-        interactionSchemaVersion: 1,
-        ...(Number.parseFloat(String(Platform.Version)) >= 17
-          ? { liveActivityInteractionVersion: 1 as const }
-          : {}),
-      });
-
-      await SecureStore.setItemAsync(EXPO_TOKEN_KEY, expoToken);
-      await SecureStore.setItemAsync(DEVICE_ID_KEY, registered.device.id);
-      if (apns) {
-        await SecureStore.setItemAsync(APNS_TOKEN_KEY, apns);
-      } else {
-        await SecureStore.deleteItemAsync(APNS_TOKEN_KEY);
-      }
-
-      setExpoPushToken(expoToken);
+      const registered = await registerCurrentDevice();
+      setFcmToken(registered.fcmToken);
       setRegistration("registered");
       void trackAppEvent("device_registration_completed", {
         path: "/home",
@@ -134,7 +95,6 @@ export default function HomeScreen() {
       });
       void trackOnboardingCompleted();
       void flushInteractionResponses();
-      refreshLiveActivityTokenSync(registered.device.id);
     } catch (err) {
       void trackAppEvent("device_registration_completed", { path: "/home", outcome: "failed" });
       if (!preserveReadyState) {
@@ -170,12 +130,8 @@ export default function HomeScreen() {
     if (!session) return;
     void refreshEvents();
     const interval = setInterval(() => void refreshEvents(), 10_000);
-    const notificationSubscription = Notifications.addNotificationReceivedListener(() => {
-      void refreshEvents();
-    });
     return () => {
       clearInterval(interval);
-      notificationSubscription.remove();
     };
   }, [session, refreshEvents]);
 
@@ -188,17 +144,17 @@ export default function HomeScreen() {
         onPress: () => {
           void (async () => {
             try {
-              if (expoPushToken) {
-                await api.unregisterDevice({ expoPushToken });
+              if (fcmToken) {
+                await api.unregisterDevice({ fcmToken });
               }
             } catch {
               // Best effort — the server also deactivates stale tokens.
             }
             await Promise.all([
-              SecureStore.deleteItemAsync(EXPO_TOKEN_KEY),
-              SecureStore.deleteItemAsync(APNS_TOKEN_KEY),
+              SecureStore.deleteItemAsync(FCM_TOKEN_KEY),
               SecureStore.deleteItemAsync(DEVICE_ID_KEY),
               clearInteractionResponses(),
+              configure({ backendOrigin: API_URL, deviceId: null }),
             ]);
             await authClient.signOut();
             router.replace("/");
@@ -220,16 +176,16 @@ export default function HomeScreen() {
           onPress: () => {
             void (async () => {
               try {
-                if (expoPushToken) await api.unregisterDevice({ expoPushToken });
+                if (fcmToken) await api.unregisterDevice({ fcmToken });
                 const result = await authClient.deleteUser();
                 if (result.error) {
                   throw new Error(result.error.message ?? "Account deletion was not completed");
                 }
                 await Promise.all([
-                  SecureStore.deleteItemAsync(EXPO_TOKEN_KEY),
-                  SecureStore.deleteItemAsync(APNS_TOKEN_KEY),
+                  SecureStore.deleteItemAsync(FCM_TOKEN_KEY),
                   SecureStore.deleteItemAsync(DEVICE_ID_KEY),
                   clearInteractionResponses(),
+                  configure({ backendOrigin: API_URL, deviceId: null }),
                 ]);
                 router.replace("/");
               } catch (error) {
@@ -245,13 +201,13 @@ export default function HomeScreen() {
     );
   };
 
+  if (PREVIEW_MODE) return <Redirect href="/inbox" />;
   if (!isPending && !session) {
     return <Redirect href="/" />;
   }
 
   const ready = permission === "granted" && registration === "registered";
 
-  if (__DEV__ && !Device.isDevice) return <Redirect href="/inbox" />;
   if (ready) return <Redirect href="/inbox" />;
 
   return (
@@ -270,8 +226,8 @@ export default function HomeScreen() {
 
         <Text style={styles.greeting}>
           {ready
-            ? "This iPhone is ready to receive notifications."
-            : "Two steps and this iPhone starts receiving your webhooks."}
+            ? "This device is ready to receive notifications."
+            : "Two steps and this device starts receiving your webhooks."}
         </Text>
 
         {ready ? (
@@ -287,11 +243,19 @@ export default function HomeScreen() {
               done={permission === "granted"}
               body={
                 permission === "denied"
-                  ? "Notifications are turned off. Enable them for Hark in the iOS Settings app."
+                  ? "Notifications are turned off. Enable them for Hark in Android Settings."
                   : "Hark shows each webhook as a communication notification with your service's name and avatar."
               }
-              actionLabel={permission === "granted" ? undefined : "Allow notifications"}
-              onAction={permission === "denied" ? undefined : requestPermission}
+              actionLabel={
+                permission === "granted"
+                  ? undefined
+                  : permission === "denied"
+                    ? "Open settings"
+                    : "Allow notifications"
+              }
+              onAction={
+                permission === "denied" ? () => openNotificationSettings() : requestPermission
+              }
             />
 
             <StepCard
@@ -301,7 +265,7 @@ export default function HomeScreen() {
               body={
                 registration === "registered"
                   ? "This device is registered and ready when notifications are enabled."
-                  : "Links this iPhone to your account so your services can reach it."
+                  : "Links this device to your account so your services can reach it."
               }
               actionLabel={
                 registration === "registered"

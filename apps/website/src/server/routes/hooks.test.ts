@@ -7,6 +7,7 @@ const sent: Array<Record<string, unknown>> = [];
 const billingTestState = vi.hoisted(() => ({
   pro: false,
   accountPerMinute: null as number | null,
+  retryableFcmFailures: 0,
 }));
 
 vi.mock("../lib/billing", () => ({
@@ -31,28 +32,29 @@ vi.mock("../lib/billing", () => ({
   createBillingPortal: async () => "https://example.com/portal",
 }));
 
-vi.mock("expo-server-sdk", () => {
-  class Expo {
-    // biome-ignore lint/complexity/noUselessConstructor: mock parity with the SDK
-    constructor(_options?: unknown) {}
-    chunkPushNotifications(messages: Array<Record<string, unknown>>) {
-      return [messages];
+vi.mock("../lib/fcm", () => ({
+  sendFcmMessages: async (messages: Array<Record<string, unknown>>) => {
+    sent.push(...messages);
+    if (billingTestState.retryableFcmFailures > 0) {
+      billingTestState.retryableFcmFailures -= 1;
+      return {
+        accepted: 0,
+        errors: ["UNAVAILABLE: try again"],
+        staleTokens: [],
+        retryableFailures: messages.length,
+      };
     }
-    async sendPushNotificationsAsync(chunk: Array<Record<string, unknown>>) {
-      sent.push(...chunk);
-      return chunk.map((message) =>
-        typeof message.to === "string" && message.to.includes("stale")
-          ? {
-              status: "error",
-              message: "device gone",
-              details: { error: "DeviceNotRegistered" },
-            }
-          : { status: "ok", id: "ticket" },
-      );
-    }
-  }
-  return { Expo, default: Expo };
-});
+    const staleTokens = messages
+      .map((message) => message.token)
+      .filter((token): token is string => typeof token === "string" && token.includes("stale"));
+    return {
+      accepted: messages.length - staleTokens.length,
+      errors: staleTokens.map(() => "UNREGISTERED: device gone"),
+      staleTokens,
+      retryableFailures: 0,
+    };
+  },
+}));
 
 let app: typeof import("../app")["app"];
 let db: typeof import("../db")["db"];
@@ -122,7 +124,7 @@ describe("POST /hooks/:token", () => {
     const json = (await res.json()) as { ok: boolean; delivered: number; message?: string };
     expect(json.ok).toBe(true);
     expect(json.delivered).toBe(0);
-    expect(json.message).toContain("No active iOS devices");
+    expect(json.message).toContain("No active Android devices");
   });
 
   it("delivers to active devices and resolves overrides", async () => {
@@ -131,7 +133,9 @@ describe("POST /hooks/:token", () => {
       id: "dev_1",
       userId: "user_1",
       expoPushToken: "ExponentPushToken[a]",
-      platform: "ios",
+      fcmToken: "fcm-a",
+      platform: "android",
+      notificationSchemaVersion: 1,
       active: true,
       interactionSchemaVersion: 1,
       createdAt: now,
@@ -141,24 +145,27 @@ describe("POST /hooks/:token", () => {
     sent.length = 0;
     const res = await post(TOKEN, { body: "Build failed", title: "CI" });
     expect(res.status).toBe(200);
-    const json = (await res.json()) as { ok: boolean; delivered: number; eventId: string };
+    const json = (await res.json()) as {
+      ok: boolean;
+      accepted: number;
+      delivered: number;
+      eventId: string;
+    };
     expect(json.ok).toBe(true);
+    expect(json.accepted).toBe(1);
     expect(json.delivered).toBe(1);
     expect(json.eventId).toMatch(/^evt_/);
 
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({
-      to: "ExponentPushToken[a]",
-      title: "CI",
-      body: "Build failed",
-      mutableContent: true,
-      priority: "high",
-      // Falls back to the service image when the webhook has no override.
-      richContent: { image: "https://example.com/default.png" },
+      token: "fcm-a",
+      envelope: {
+        kind: "notification",
+        title: "CI",
+        body: "Build failed",
+        avatarUrl: "https://example.com/default.png",
+      },
     });
-    const data = sent[0]?.data as Record<string, unknown>;
-    expect(data.sourceName).toBe("CI");
-    expect(data.conversationId).toBe("hark-svc_1");
     expect(JSON.stringify(sent[0])).not.toContain("user_1");
   });
 
@@ -168,7 +175,9 @@ describe("POST /hooks/:token", () => {
       id: "dev_2",
       userId: "user_1",
       expoPushToken: "ExponentPushToken[b]",
-      platform: "ios",
+      fcmToken: "fcm-b",
+      platform: "android",
+      notificationSchemaVersion: 1,
       active: true,
       interactionSchemaVersion: 1,
       createdAt: now,
@@ -182,10 +191,7 @@ describe("POST /hooks/:token", () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true, delivered: 2 });
-    expect(sent.map((message) => message.to).sort()).toEqual([
-      "ExponentPushToken[a]",
-      "ExponentPushToken[b]",
-    ]);
+    expect(sent.map((message) => message.token).sort()).toEqual(["fcm-a", "fcm-b"]);
   });
 
   it("routes a Pro notification only to selected devices", async () => {
@@ -197,7 +203,7 @@ describe("POST /hooks/:token", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true, delivered: 1 });
     expect(sent).toHaveLength(1);
-    expect(sent[0]?.to).toBe("ExponentPushToken[a]");
+    expect(sent[0]?.token).toBe("fcm-a");
   });
 
   it("creates and resolves a Pro approval through the webhook event", async () => {
@@ -228,24 +234,34 @@ describe("POST /hooks/:token", () => {
     });
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({
-      categoryId: "HARK_APPROVAL_V1",
-      richContent: { image: "https://example.com/ci.png" },
+      token: "fcm-a",
+      envelope: {
+        avatarUrl: "https://example.com/ci.png",
+        interaction: {
+          kind: "approval",
+          actions: [
+            { id: "approve", title: "Approve" },
+            { id: "deny", title: "Deny", destructive: true },
+          ],
+        },
+      },
     });
-    const data = sent[0]?.data as {
-      interactionId: string;
-      responseToken: string;
-      avatarUrl: string;
-    };
-    expect(data.avatarUrl).toBe("https://example.com/ci.png");
+    const data = (
+      sent[0]?.envelope as
+        | { interaction: { id: string; responseToken: string; actionDigest: string } }
+        | undefined
+    )?.interaction;
+    if (!data) throw new Error("Expected interaction push data");
 
     const callbackFetch = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(new Response(null, { status: 204 }));
-    const response = await app.request(`/api/interaction-responses/${data.interactionId}/respond`, {
+    const response = await app.request(`/api/interaction-responses/${data.id}/respond`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         action: "approve",
+        actionDigest: data.actionDigest,
         deviceId: "dev_1",
         responseToken: data.responseToken,
       }),
@@ -292,12 +308,18 @@ describe("POST /hooks/:token", () => {
     });
     billingTestState.pro = false;
     const createdBody = (await created.json()) as { eventId: string };
-    const data = sent[0]?.data as { interactionId: string; responseToken: string };
-    const response = await app.request(`/api/interaction-responses/${data.interactionId}/respond`, {
+    const data = (
+      sent[0]?.envelope as
+        | { interaction: { id: string; responseToken: string; actionDigest: string } }
+        | undefined
+    )?.interaction;
+    if (!data) throw new Error("Expected interaction push data");
+    const response = await app.request(`/api/interaction-responses/${data.id}/respond`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         action: "reply",
+        actionDigest: data.actionDigest,
         response: "Build 11 works",
         deviceId: "dev_1",
         responseToken: data.responseToken,
@@ -333,7 +355,9 @@ describe("POST /hooks/:token", () => {
       id: "dev_foreign",
       userId: "user_2",
       expoPushToken: "ExponentPushToken[foreign]",
-      platform: "ios",
+      fcmToken: "fcm-foreign",
+      platform: "android",
+      notificationSchemaVersion: 1,
       active: true,
       createdAt: now,
       lastSeenAt: now,
@@ -380,6 +404,19 @@ describe("POST /hooks/:token", () => {
     expect(sent).toHaveLength(1);
   });
 
+  it("allows an idempotent retry after no message was accepted for a transient failure", async () => {
+    sent.length = 0;
+    billingTestState.retryableFcmFailures = 1;
+    const first = await post(TOKEN, { body: "Retry me" }, "transient-delivery-1");
+    const second = await post(TOKEN, { body: "Retry me" }, "transient-delivery-1");
+
+    expect(first.status).toBe(503);
+    expect(first.headers.get("retry-after")).toBe("1");
+    expect(second.status).toBe(200);
+    expect(await second.json()).toMatchObject({ ok: true, accepted: 1 });
+    expect(sent).toHaveLength(2);
+  });
+
   it("rejects an idempotency key reused with a different payload", async () => {
     const res = await post(TOKEN, { body: "Different body" }, "deploy-184");
     expect(res.status).toBe(409);
@@ -389,13 +426,15 @@ describe("POST /hooks/:token", () => {
     });
   });
 
-  it("deactivates devices Expo reports as unregistered", async () => {
+  it("deactivates devices FCM reports as unregistered", async () => {
     const now = new Date();
     await db.insert(schema.device).values({
       id: "dev_stale",
       userId: "user_1",
       expoPushToken: "ExponentPushToken[stale]",
-      platform: "ios",
+      fcmToken: "fcm-stale",
+      platform: "android",
+      notificationSchemaVersion: 1,
       active: true,
       createdAt: now,
       lastSeenAt: now,
@@ -430,16 +469,16 @@ describe("POST /hooks/:token", () => {
       createdAt: now,
       updatedAt: now,
     });
-    // The Expo mock only fails this token, and it is unique across devices.
+    // The FCM mock only fails this token, and it is unique across devices.
     const { eq } = await import("drizzle-orm");
-    await db
-      .delete(schema.device)
-      .where(eq(schema.device.expoPushToken, "ExponentPushToken[stale]"));
+    await db.delete(schema.device).where(eq(schema.device.fcmToken, "fcm-stale"));
     await db.insert(schema.device).values({
       id: "dev_fail_only",
       userId: "user_fail",
       expoPushToken: "ExponentPushToken[stale]",
-      platform: "ios",
+      fcmToken: "fcm-stale-fail-only",
+      platform: "android",
+      notificationSchemaVersion: 1,
       active: true,
       createdAt: now,
       lastSeenAt: now,
@@ -448,7 +487,7 @@ describe("POST /hooks/:token", () => {
     const res = await post(failToken, { body: "ping" });
     expect(res.status).toBe(502);
     const raw = await res.text();
-    expect(raw).not.toContain("ExponentPushToken");
+    expect(raw).not.toContain("fcm-stale-fail-only");
     expect(raw).not.toContain("device gone");
     expect(JSON.parse(raw)).toEqual({ ok: false, error: "Push delivery failed" });
   });
@@ -566,7 +605,9 @@ describe("POST /hooks/:token/events/:eventId/withdraw", () => {
       id: "dev_withdraw",
       userId: "user_withdraw",
       expoPushToken: "ExponentPushToken[withdraw]",
-      platform: "ios",
+      fcmToken: "fcm-withdraw",
+      platform: "android",
+      notificationSchemaVersion: 1,
       active: true,
       createdAt: now,
       lastSeenAt: now,
@@ -614,9 +655,12 @@ describe("POST /hooks/:token/events/:eventId/withdraw", () => {
     });
     expect(sent).toEqual([
       {
-        to: "ExponentPushToken[withdraw]",
-        data: { v: 1, command: "notification.withdraw", eventId },
-        _contentAvailable: true,
+        token: "fcm-withdraw",
+        envelope: expect.objectContaining({
+          v: 1,
+          kind: "notification.withdraw",
+          eventId,
+        }),
       },
     ]);
 
@@ -646,7 +690,7 @@ describe("POST /hooks/:token/events/:eventId/withdraw", () => {
     expect(sent).toHaveLength(1);
   });
 
-  it("does not mark an event withdrawn when Expo rejects every command", async () => {
+  it("does not mark an event withdrawn when FCM rejects every command", async () => {
     const now = new Date();
     const token = "whk_withdraw-fail-abcdefghijklmnopqr";
     const eventId = "evt_withdraw_fail";
@@ -670,7 +714,9 @@ describe("POST /hooks/:token/events/:eventId/withdraw", () => {
       id: "dev_withdraw_fail",
       userId: "user_withdraw_fail",
       expoPushToken: "ExponentPushToken[withdraw-stale]",
-      platform: "ios",
+      fcmToken: "fcm-withdraw-stale",
+      platform: "android",
+      notificationSchemaVersion: 1,
       active: true,
       createdAt: now,
       lastSeenAt: now,
@@ -749,8 +795,8 @@ describe("webhook project, summary, and body capacity", () => {
     expect(projectRow?.name).toBe("Acme App");
 
     // The push carries the summary and the project metadata, never the raw body.
-    expect(sent[0]).toMatchObject({ body: "Deploy digest" });
-    expect(((sent[0]?.data ?? {}) as Record<string, unknown>).projectId).toBe(
+    expect(sent[0]).toMatchObject({ envelope: { body: "Deploy digest" } });
+    expect(((sent[0]?.envelope ?? {}) as Record<string, unknown>).projectId).toBe(
       firstEvent?.projectId,
     );
   });
@@ -849,7 +895,7 @@ describe("webhook project, summary, and body capacity", () => {
     await db.delete(schema.project).where(eq(schema.project.name, "Filler 0"));
   });
 
-  it("accepts an 8,000-character body and keeps the push below the APNs cap", async () => {
+  it("accepts an 8,000-character body and keeps the push below the FCM data cap", async () => {
     const { eq } = await import("drizzle-orm");
     sent.length = 0;
     const body = `head ${"気配り🚀 ".repeat(1_100)}tail`.slice(0, 8_000);
@@ -864,8 +910,10 @@ describe("webhook project, summary, and body capacity", () => {
     expect(row?.body).toBe(body);
 
     expect(sent).toHaveLength(1);
-    expect(Buffer.byteLength(JSON.stringify(sent[0]), "utf8")).toBeLessThanOrEqual(4_096);
-    expect(String(sent[0]?.body).endsWith("…")).toBe(true);
+    expect(
+      Buffer.byteLength(JSON.stringify({ hark: JSON.stringify(sent[0]?.envelope) }), "utf8"),
+    ).toBeLessThanOrEqual(4_096);
+    expect(String((sent[0]?.envelope as { body?: string })?.body).endsWith("…")).toBe(true);
   });
 
   it("rejects a body over the UTF-8 byte cap with a validation error", async () => {

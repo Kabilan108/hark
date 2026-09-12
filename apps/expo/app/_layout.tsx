@@ -4,35 +4,17 @@ import {
   Inter_600SemiBold,
   useFonts,
 } from "@expo-google-fonts/inter";
-import * as Notifications from "expo-notifications";
 import { Stack, usePathname } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
 import { AppState } from "react-native";
 import { trackAppEvent } from "../src/lib/analytics";
 import { useSession } from "../src/lib/auth";
-import {
-  flushInteractionResponses,
-  handleNotificationResponse,
-  registerInteractionCategories,
-} from "../src/lib/interactions";
-import { startLiveActivityTokenSync } from "../src/lib/live-activities";
+import { reconcileDeviceRegistration } from "../src/lib/device";
+import { flushInteractionResponses } from "../src/lib/interactions";
 import { colors } from "../src/lib/theme";
 
 void SplashScreen.preventAutoHideAsync();
-void registerInteractionCategories().catch((error) => {
-  console.warn("Could not register notification actions", error);
-});
-
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
-
 export default function RootLayout() {
   const { data: session } = useSession();
   const pathname = usePathname();
@@ -48,17 +30,7 @@ export default function RootLayout() {
 
   useEffect(() => {
     void trackAppEvent("app_open");
-    // Handle both a cold launch from a notification and taps while the app is running.
-    const initialResponse = Notifications.getLastNotificationResponse();
-    if (initialResponse) {
-      void handleNotificationResponse(initialResponse);
-      void Notifications.clearLastNotificationResponseAsync();
-    }
     void flushInteractionResponses();
-
-    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
-      void handleNotificationResponse(response);
-    });
     const appState = AppState.addEventListener("change", (state) => {
       if (state === "active") {
         void flushInteractionResponses();
@@ -67,20 +39,29 @@ export default function RootLayout() {
     });
     const retryTimer = setInterval(() => void flushInteractionResponses(), 30_000);
     return () => {
-      subscription.remove();
       appState.remove();
       clearInterval(retryTimer);
     };
   }, []);
 
   useEffect(() => {
-    void trackAppEvent("screen_view", { path: pathname });
-  }, [pathname]);
+    if (!session) return;
+
+    const reconcile = () => {
+      void reconcileDeviceRegistration().catch((error) => {
+        console.warn("Could not refresh Android device registration", error);
+      });
+    };
+    reconcile();
+    const appState = AppState.addEventListener("change", (state) => {
+      if (state === "active") reconcile();
+    });
+    return () => appState.remove();
+  }, [session]);
 
   useEffect(() => {
-    if (!session) return;
-    return startLiveActivityTokenSync();
-  }, [session]);
+    void trackAppEvent("screen_view", { path: pathname });
+  }, [pathname]);
 
   if (!fontsLoaded && !fontError) return null;
 

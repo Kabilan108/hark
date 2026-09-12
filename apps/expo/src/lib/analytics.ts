@@ -38,12 +38,12 @@ export async function trackAppEvent(
       eventId: randomId(),
       anonymousId: await getInstallationId(),
       sessionId,
-      surface: "ios",
+      surface: "android",
       name,
       ...input,
       properties: {
         appVersion: Constants.expoConfig?.version ?? undefined,
-        appBuild: Constants.expoConfig?.ios?.buildNumber ?? undefined,
+        appBuild: Constants.expoConfig?.android?.versionCode?.toString(),
         ...input.properties,
       },
     };

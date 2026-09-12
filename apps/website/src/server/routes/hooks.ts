@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { type WebhookResponse, webhookRequestSchema } from "@hark/contracts";
-import { and, count, desc, eq, gte, inArray, isNull } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, isNotNull, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 import { db } from "../db";
 import {
@@ -45,6 +45,7 @@ function replayResponse(row: EventRow): {
       body: {
         ok: true,
         eventId: row.id,
+        accepted: row.deliveredCount,
         delivered: row.deliveredCount,
         idempotent: true,
         message: "The original request is still processing.",
@@ -52,7 +53,7 @@ function replayResponse(row: EventRow): {
       status: 202,
     };
   }
-  if (row.status === "failed") {
+  if (row.status === "failed" || row.status === "retryable_failure") {
     return {
       body: {
         ok: false,
@@ -65,10 +66,11 @@ function replayResponse(row: EventRow): {
     body: {
       ok: true,
       eventId: row.id,
+      accepted: row.deliveredCount,
       delivered: row.deliveredCount,
       idempotent: true,
       ...(row.status === "no_devices"
-        ? { message: "No active iOS devices are registered for this account." }
+        ? { message: "No active Android devices are registered for this account." }
         : {}),
     },
     status: 200,
@@ -122,8 +124,14 @@ export const hooksRoute = new Hono()
             409,
           );
         }
-        const replay = replayResponse(existing);
-        return c.json(replay.body, replay.status);
+        if (existing.status === "retryable_failure") {
+          // Nothing was accepted, so removing the failed claim lets the same
+          // idempotency key safely make a fresh bounded delivery attempt.
+          await db.delete(event).where(eq(event.id, existing.id));
+        } else {
+          const replay = replayResponse(existing);
+          return c.json(replay.body, replay.status);
+        }
       }
     }
 
@@ -154,7 +162,11 @@ export const hooksRoute = new Hono()
         return c.json<WebhookResponse>({ ok: false, error: "Invalid device selection" }, 400);
       }
       targetedDevices = selected.filter(
-        (registeredDevice) => registeredDevice.active && registeredDevice.platform === "ios",
+        (registeredDevice) =>
+          registeredDevice.active &&
+          registeredDevice.platform === "android" &&
+          registeredDevice.fcmToken !== null &&
+          registeredDevice.notificationSchemaVersion === 1,
       );
     }
 
@@ -282,7 +294,13 @@ export const hooksRoute = new Hono()
         .select()
         .from(device)
         .where(
-          and(eq(device.userId, svc.userId), eq(device.active, true), eq(device.platform, "ios")),
+          and(
+            eq(device.userId, svc.userId),
+            eq(device.active, true),
+            eq(device.platform, "android"),
+            isNotNull(device.fcmToken),
+            eq(device.notificationSchemaVersion, 1),
+          ),
         )
         .orderBy(desc(device.lastSeenAt));
       devices =
@@ -352,6 +370,7 @@ export const hooksRoute = new Hono()
       return c.json<WebhookResponse>({
         ok: true,
         eventId,
+        accepted: 0,
         delivered: 0,
         ...(parsed.data.response
           ? {
@@ -362,7 +381,7 @@ export const hooksRoute = new Hono()
             }
           : {}),
         message: [
-          "No active iOS devices are registered for this account.",
+          "No active Android devices are registered for this account.",
           projectResolution.message,
         ]
           .filter(Boolean)
@@ -372,19 +391,28 @@ export const hooksRoute = new Hono()
 
     const messages = parsed.data.response
       ? buildInteractionPushMessages({
-          to: devices.map((registeredDevice) => registeredDevice.expoPushToken),
+          to: devices.flatMap((registeredDevice) =>
+            registeredDevice.fcmToken
+              ? [{ token: registeredDevice.fcmToken, deviceId: registeredDevice.id }]
+              : [],
+          ),
           interactionId: interactionId as string,
           eventId,
           kind: parsed.data.response.type === "text" ? "reply" : parsed.data.response.type,
           title: resolved.title,
           prompt: resolved.body,
           actionDigest: interactionActionDigest as string,
-          responseToken,
+          responseToken: responseToken as string,
+          expiresAt: (interactionExpiresAt as Date).toISOString(),
           imageUrl: resolved.imageUrl,
           url: resolved.url,
         })
       : buildPushMessages({
-          to: devices.map((registeredDevice) => registeredDevice.expoPushToken),
+          to: devices.flatMap((registeredDevice) =>
+            registeredDevice.fcmToken
+              ? [{ token: registeredDevice.fcmToken, deviceId: registeredDevice.id }]
+              : [],
+          ),
           eventId,
           serviceId: svc.id,
           ...(projectResolution.projectId ? { projectId: projectResolution.projectId } : {}),
@@ -396,7 +424,7 @@ export const hooksRoute = new Hono()
       await db
         .update(device)
         .set({ active: false })
-        .where(inArray(device.expoPushToken, result.staleTokens));
+        .where(inArray(device.fcmToken, result.staleTokens));
       track({
         name: "device_deactivated_stale",
         userId: svc.userId,
@@ -407,7 +435,13 @@ export const hooksRoute = new Hono()
     }
 
     const status =
-      result.accepted === messages.length ? "accepted" : result.accepted > 0 ? "partial" : "failed";
+      result.accepted === messages.length
+        ? "accepted"
+        : result.accepted > 0
+          ? "partial"
+          : result.retryableFailures > 0
+            ? "retryable_failure"
+            : "failed";
     const pushError = result.errors.length > 0 ? result.errors.join("; ").slice(0, 1000) : null;
 
     await db
@@ -432,7 +466,11 @@ export const hooksRoute = new Hono()
       });
       // Provider errors can embed the recipient push token, so they stay in the
       // owner-only event log rather than the webhook caller's response.
-      return c.json<WebhookResponse>({ ok: false, error: "Push delivery failed" }, 502);
+      if (result.retryableFailures > 0) c.header("Retry-After", "1");
+      return c.json<WebhookResponse>(
+        { ok: false, error: "Push delivery failed" },
+        result.retryableFailures > 0 ? 503 : 502,
+      );
     }
 
     track({
@@ -458,6 +496,7 @@ export const hooksRoute = new Hono()
     return c.json<WebhookResponse>({
       ok: true,
       eventId,
+      accepted: result.accepted,
       delivered: result.accepted,
       ...(parsed.data.response
         ? {
@@ -563,11 +602,17 @@ export const hooksRoute = new Hono()
           and(
             eq(device.userId, match.service.userId),
             eq(device.active, true),
-            eq(device.platform, "ios"),
+            eq(device.platform, "android"),
+            isNotNull(device.fcmToken),
+            eq(device.notificationSchemaVersion, 1),
           ),
         );
       const messages = buildNotificationWithdrawalPushMessages(
-        devices.map((registeredDevice) => registeredDevice.expoPushToken),
+        devices.flatMap((registeredDevice) =>
+          registeredDevice.fcmToken
+            ? [{ token: registeredDevice.fcmToken, deviceId: registeredDevice.id }]
+            : [],
+        ),
         eventId,
       );
 
@@ -581,7 +626,7 @@ export const hooksRoute = new Hono()
         await db
           .update(device)
           .set({ active: false })
-          .where(inArray(device.expoPushToken, result.staleTokens));
+          .where(inArray(device.fcmToken, result.staleTokens));
       }
       if (result.accepted === 0) {
         await restoreEventAfterFailedWithdrawal(eventId, match.event.status);

@@ -1,8 +1,6 @@
 import type { InboxNotificationDetailDto } from "@hark/contracts";
-import * as Device from "expo-device";
 import { Redirect, useLocalSearchParams, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { SymbolView } from "expo-symbols";
 import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -18,6 +16,8 @@ import { api, classifyNotificationDetailFailure } from "../../src/lib/api";
 import { useSession } from "../../src/lib/auth";
 import { linkifyBody, openBodyLink, openTopLevelDestination } from "../../src/lib/inbox-body";
 import { previewNotificationDetail } from "../../src/lib/inbox-preview";
+import { PREVIEW_MODE } from "../../src/lib/preview";
+import { SymbolView } from "../../src/lib/symbol-view";
 import { colors, fonts, tightTracking } from "../../src/lib/theme";
 
 export default function NotificationDetailScreen() {
@@ -25,7 +25,7 @@ export default function NotificationDetailScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ id: string }>();
   const compositeId = typeof params.id === "string" ? params.id : "";
-  const simulatorPreview = __DEV__ && !Device.isDevice;
+  const simulatorPreview = PREVIEW_MODE;
 
   const [notification, setNotification] = useState<InboxNotificationDetailDto | null>(null);
   const [loading, setLoading] = useState(true);
@@ -69,12 +69,12 @@ export default function NotificationDetailScreen() {
     } finally {
       setLoading(false);
     }
-  }, [compositeId, router, simulatorPreview]);
+  }, [compositeId, router]);
 
   useEffect(() => {
     if (!session && !simulatorPreview) return;
     void load();
-  }, [load, session, simulatorPreview]);
+  }, [load, session]);
 
   const toggleRead = async () => {
     if (!notification || togglingRead) return;

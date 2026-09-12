@@ -5,6 +5,7 @@ import { auth } from "./auth";
 import { db } from "./db";
 import { apiToken } from "./db/schema";
 import { trackUserActive } from "./lib/analytics";
+import { isAuthorizedOwnerUser } from "./lib/owner";
 import { hashApiToken } from "./lib/token";
 
 export interface AuthedUser {
@@ -29,7 +30,7 @@ export type AgentEnv = {
 /** Derives the user from the Better Auth session cookie. Rejects anonymous requests. */
 export const requireAuth = createMiddleware<AuthedEnv>(async (c, next) => {
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
-  if (!session) {
+  if (!session || !(await isAuthorizedOwnerUser(session.user.id))) {
     return c.json({ error: "Unauthorized" }, 401);
   }
   c.set("user", {
@@ -60,7 +61,11 @@ export const requireApiToken = createMiddleware<AgentEnv>(async (c, next) => {
       ),
     )
     .limit(1);
-  if (!token || (token.expiresAt && token.expiresAt <= now)) {
+  if (
+    !token ||
+    (token.expiresAt && token.expiresAt <= now) ||
+    !(await isAuthorizedOwnerUser(token.userId))
+  ) {
     return c.json({ error: "Unauthorized" }, 401);
   }
 

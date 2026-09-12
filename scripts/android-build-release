@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd -- "$script_dir/.." && pwd)"
+signing_properties="${HARK_ANDROID_SIGNING_PROPERTIES:-/vault/userdata/hark/secrets/android-release-signing.properties}"
+architectures="${HARK_ANDROID_ARCHITECTURES:-arm64-v8a,x86_64}"
+output_apk="${HARK_ANDROID_RELEASE_APK:-/vault/userdata/hark/builds/hark-android-release.apk}"
+configure_only=false
+
+if [[ "${1:-}" == "--configure-only" ]]; then
+  configure_only=true
+  shift
+fi
+if (( $# != 0 )); then
+  printf 'Usage: %s [--configure-only]\n' "$0" >&2
+  exit 2
+fi
+
+: "${ANDROID_HOME:?Run this command through the project dev shell}"
+[[ -r "$signing_properties" ]] || {
+  printf 'Signing properties are not readable: %s\n' "$signing_properties" >&2
+  exit 1
+}
+
+signing_properties="$(realpath "$signing_properties")"
+case "$signing_properties" in
+  "$repo_root"/*)
+    printf 'Signing properties must remain outside the repository\n' >&2
+    exit 1
+    ;;
+esac
+
+properties_mode="$(stat -c '%a' "$signing_properties")"
+if (( (8#$properties_mode & 077) != 0 )); then
+  printf 'Signing properties must not be accessible by group or other users: %s\n' "$signing_properties" >&2
+  exit 1
+fi
+
+cd "$repo_root"
+corepack pnpm --filter @hark/expo exec expo prebuild -p android --clean --no-install
+
+build_gradle="$repo_root/apps/expo/android/app/build.gradle"
+BUILD_GRADLE="$build_gradle" node <<'NODE'
+const fs = require("node:fs");
+
+const path = process.env.BUILD_GRADLE;
+let source = fs.readFileSync(path, "utf8");
+
+const propertyAnchor =
+  "def enableMinifyInReleaseBuilds = (findProperty('android.enableMinifyInReleaseBuilds') ?: false).toBoolean()\n";
+const propertyBlock = `${propertyAnchor}
+
+def harkReleaseSigningFilePath = findProperty('HARK_RELEASE_SIGNING_PROPERTIES')
+def requestedReleaseBuild = gradle.startParameter.taskNames.any {
+    it.toLowerCase().contains('release')
+}
+if (requestedReleaseBuild && !harkReleaseSigningFilePath) {
+    throw new GradleException('HARK_RELEASE_SIGNING_PROPERTIES is required for Android release builds')
+}
+
+def harkReleaseSigningProperties = new Properties()
+if (harkReleaseSigningFilePath) {
+    def signingFile = file(harkReleaseSigningFilePath)
+    if (!signingFile.isFile()) {
+        throw new GradleException("Hark release signing properties do not exist: \${signingFile}")
+    }
+    signingFile.withInputStream { stream ->
+        harkReleaseSigningProperties.load(stream)
+    }
+}
+
+def requiredHarkReleaseSigningProperties = [
+    'HARK_RELEASE_STORE_FILE',
+    'HARK_RELEASE_STORE_PASSWORD',
+    'HARK_RELEASE_KEY_ALIAS',
+    'HARK_RELEASE_KEY_PASSWORD',
+]
+def missingHarkReleaseSigningProperties = requiredHarkReleaseSigningProperties.findAll {
+    !harkReleaseSigningProperties.getProperty(it)
+}
+if (requestedReleaseBuild && missingHarkReleaseSigningProperties) {
+    throw new GradleException(
+        "Missing Hark release signing properties: \${missingHarkReleaseSigningProperties.join(', ')}"
+    )
+}
+def hasHarkReleaseSigning = missingHarkReleaseSigningProperties.isEmpty()
+`;
+
+const signingAnchor = `        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+`;
+const signingBlock = `${signingAnchor}        if (hasHarkReleaseSigning) {
+            release {
+                storeFile file(harkReleaseSigningProperties.getProperty('HARK_RELEASE_STORE_FILE'))
+                storePassword harkReleaseSigningProperties.getProperty('HARK_RELEASE_STORE_PASSWORD')
+                keyAlias harkReleaseSigningProperties.getProperty('HARK_RELEASE_KEY_ALIAS')
+                keyPassword harkReleaseSigningProperties.getProperty('HARK_RELEASE_KEY_PASSWORD')
+            }
+        }
+`;
+
+const releaseAnchor = `        release {
+            // Caution! In production, you need to generate your own keystore file.
+            // see https://reactnative.dev/docs/signed-apk-android.
+            signingConfig signingConfigs.debug
+`;
+const releaseBlock = `        release {
+            if (hasHarkReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
+`;
+
+for (const [anchor, replacement, label] of [
+  [propertyAnchor, propertyBlock, "release properties"],
+  [signingAnchor, signingBlock, "release signing config"],
+  [releaseAnchor, releaseBlock, "release build type"],
+]) {
+  if (!source.includes(anchor)) {
+    throw new Error(`Cannot apply ${label}; Expo generated an unexpected app/build.gradle`);
+  }
+  source = source.replace(anchor, replacement);
+}
+
+fs.writeFileSync(path, source);
+NODE
+
+printf 'Configured generated Android release signing from %s\n' "$signing_properties"
+if [[ "$configure_only" == true ]]; then
+  exit 0
+fi
+
+apps/expo/android/gradlew \
+  -p apps/expo/android \
+  assembleRelease \
+  --no-daemon \
+  "-PHARK_RELEASE_SIGNING_PROPERTIES=$signing_properties" \
+  "-PreactNativeArchitectures=$architectures"
+
+generated_apk="$repo_root/apps/expo/android/app/build/outputs/apk/release/app-release.apk"
+mkdir -p "$(dirname -- "$output_apk")"
+install -m 0644 "$generated_apk" "$output_apk"
+
+"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$output_apk"
+sha256sum "$output_apk"
+printf 'Release APK: %s\n' "$output_apk"

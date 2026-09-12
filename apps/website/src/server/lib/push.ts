@@ -1,17 +1,14 @@
 import {
-  HARK_APPROVAL_CATEGORY_ID,
-  HARK_REPLY_CATEGORY_ID,
-  HARK_YES_NO_CATEGORY_ID,
+  type AndroidNotificationAction,
+  type AndroidNotificationEnvelope,
+  type HarkPushEnvelope,
   type InteractionKind,
-  type InteractionPushData,
-  type NotificationWithdrawalPushData,
   PUSH_SCHEMA_VERSION,
-  type PushData,
+  truncateToUtf8Bytes,
   type WebhookRequest,
 } from "@hark/contracts";
-import { Expo, type ExpoPushMessage, type ExpoPushTicket } from "expo-server-sdk";
 import { env } from "../env";
-import { fitPushMessage } from "./push-preview";
+import { type FcmMessage, type FcmSendResult, sendFcmMessages } from "./fcm";
 
 export interface ServiceDefaults {
   title: string;
@@ -43,190 +40,177 @@ export function resolveNotification(
 }
 
 export interface BuildPushInput {
-  to: string[];
+  to: PushTarget[];
   eventId: string;
   serviceId: string;
-  /** Overrides the thread grouping; defaults to the service so each service is one conversation. */
+  /** Retained for call-site compatibility. Android groups notifications locally. */
   conversationKey?: string;
-  /** Optional project association carried as backward-compatible push metadata. */
   projectId?: string;
   resolved: ResolvedNotification;
 }
 
-const WELCOME_AVATAR_URL =
-  "https://pbs.twimg.com/profile_images/2070959207273082880/HZoVBuA2_400x400.jpg";
+export interface PushTarget {
+  token: string;
+  deviceId: string;
+}
+
 const WELCOME_MESSAGES = [
   {
-    body: "hey! my name is ryan and I made hark!",
-    url: "https://x.com/ryanvogel",
-  },
-  {
-    body: "easily send notifications via a webhook",
-    url: "https://hark.ryan.ceo",
-  },
-  {
-    body: "get started here (click me)",
-    url: "https://hark.ryan.ceo",
+    body: "Hark is connected to your backend. You're ready to receive notifications.",
+    url: `${env.APP_URL}/dashboard`,
   },
 ] as const;
 
-export function buildWelcomePushMessages(to: string): ExpoPushMessage[] {
-  return WELCOME_MESSAGES.map((message, index) => {
-    const data: PushData = {
-      v: PUSH_SCHEMA_VERSION,
-      eventId: `hark-welcome-${index + 1}`,
-      serviceId: "hark-welcome",
-      sourceId: "ryan",
-      sourceName: "Ryan",
-      avatarUrl: WELCOME_AVATAR_URL,
-      url: message.url,
-      conversationId: "hark-welcome-ryan",
-    };
-    return {
-      to,
-      title: "Ryan",
-      body: message.body,
-      priority: "high",
-      mutableContent: true,
-      richContent: { image: WELCOME_AVATAR_URL },
-      data,
-    };
-  });
+const FCM_DATA_LIMIT_BYTES = 4_096;
+
+function fcmDataSize(envelope: HarkPushEnvelope): number {
+  return Buffer.byteLength(JSON.stringify({ hark: JSON.stringify(envelope) }), "utf8");
 }
 
-export function buildPushMessages(input: BuildPushInput): ExpoPushMessage[] {
-  const { to, eventId, serviceId, conversationKey, projectId, resolved } = input;
-  const data: PushData = {
-    v: PUSH_SCHEMA_VERSION,
-    eventId,
-    serviceId,
-    sourceId: serviceId,
-    sourceName: resolved.title,
-    ...(resolved.imageUrl ? { avatarUrl: resolved.imageUrl } : {}),
-    ...(resolved.url ? { url: resolved.url } : {}),
-    conversationId: `hark-${conversationKey ?? serviceId}`,
-    ...(projectId ? { projectId } : {}),
-  };
+/** Keep the sole FCM data field within its 4 KiB limit without splitting UTF-8. */
+function fitNotificationEnvelope(
+  envelope: AndroidNotificationEnvelope,
+): AndroidNotificationEnvelope {
+  if (fcmDataSize(envelope) <= FCM_DATA_LIMIT_BYTES) return envelope;
+  const characters = Array.from(envelope.body);
+  let low = 0;
+  let high = characters.length;
+  let best = "…";
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const candidateBody = `${characters.slice(0, middle).join("")}…`;
+    const candidate = { ...envelope, body: candidateBody };
+    if (fcmDataSize(candidate) <= FCM_DATA_LIMIT_BYTES) {
+      best = candidateBody;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  const fitted = { ...envelope, body: best };
+  if (fcmDataSize(fitted) <= FCM_DATA_LIMIT_BYTES) return fitted;
+  const minimal = { ...fitted, avatarUrl: undefined, url: undefined };
+  if (fcmDataSize(minimal) <= FCM_DATA_LIMIT_BYTES) return minimal;
+  return { ...minimal, body: truncateToUtf8Bytes(best, 512) };
+}
 
-  // The full body never enters the push payload: the summary wins when the
-  // sender provided one, and the whole message is byte-fit below the APNs
-  // size cap (body first, then optional display metadata).
-  return to.map((token) =>
-    fitPushMessage({
-      to: token,
+function notificationMessage(
+  target: PushTarget,
+  envelope: AndroidNotificationEnvelope,
+): FcmMessage {
+  return { token: target.token, envelope: fitNotificationEnvelope(envelope) };
+}
+
+export function buildWelcomePushMessages(to: PushTarget): FcmMessage[] {
+  return WELCOME_MESSAGES.map((message, index) =>
+    notificationMessage(to, {
+      v: PUSH_SCHEMA_VERSION,
+      kind: "notification",
+      backendOrigin: env.APP_URL,
+      targetDeviceId: to.deviceId,
+      eventId: `hark-welcome-${index + 1}`,
+      title: "Hark",
+      body: message.body,
+      serviceId: "hark-welcome",
+      url: message.url,
+    }),
+  );
+}
+
+export function buildPushMessages(input: BuildPushInput): FcmMessage[] {
+  const { to, eventId, serviceId, projectId, resolved } = input;
+  return to.map((target) =>
+    notificationMessage(target, {
+      v: PUSH_SCHEMA_VERSION,
+      kind: "notification",
+      backendOrigin: env.APP_URL,
+      targetDeviceId: target.deviceId,
+      eventId,
+      serviceId,
+      conversationId: `hark-${input.conversationKey ?? serviceId}`,
       title: resolved.title,
       body: resolved.summary ?? resolved.body,
-      priority: "high",
-      mutableContent: true,
-      ...(resolved.imageUrl ? { richContent: { image: resolved.imageUrl } } : {}),
-      data,
+      ...(projectId ? { projectId } : {}),
+      ...(resolved.imageUrl ? { avatarUrl: resolved.imageUrl } : {}),
+      ...(resolved.url ? { url: resolved.url } : {}),
     }),
   );
 }
 
 export function buildNotificationWithdrawalPushMessages(
-  to: string[],
+  to: PushTarget[],
   eventId: string,
-): ExpoPushMessage[] {
-  const data: NotificationWithdrawalPushData = {
-    v: PUSH_SCHEMA_VERSION,
-    command: "notification.withdraw",
-    eventId,
-  };
-  return to.map((token) => ({
-    to: token,
-    data,
-    _contentAvailable: true,
+): FcmMessage[] {
+  return to.map((target) => ({
+    token: target.token,
+    envelope: {
+      v: PUSH_SCHEMA_VERSION,
+      kind: "notification.withdraw",
+      backendOrigin: env.APP_URL,
+      targetDeviceId: target.deviceId,
+      eventId,
+    },
   }));
 }
 
 export interface BuildInteractionPushInput {
-  to: string[];
+  to: PushTarget[];
   interactionId: string;
   kind: InteractionKind;
   title: string;
   prompt: string;
   actionDigest: string;
-  responseToken?: string;
+  responseToken: string;
+  expiresAt?: string;
   eventId?: string;
   imageUrl?: string;
   url?: string;
+  primaryLabel?: string;
+  secondaryLabel?: string;
 }
 
-export function buildInteractionPushMessages(input: BuildInteractionPushInput): ExpoPushMessage[] {
-  const categoryId =
-    input.kind === "approval"
-      ? HARK_APPROVAL_CATEGORY_ID
-      : input.kind === "yes_no"
-        ? HARK_YES_NO_CATEGORY_ID
-        : HARK_REPLY_CATEGORY_ID;
-  const data: InteractionPushData = {
-    v: PUSH_SCHEMA_VERSION,
-    interactionId: input.interactionId,
-    ...(input.eventId ? { eventId: input.eventId } : {}),
-    interactionKind: input.kind,
-    sourceName: input.title,
-    conversationId: `hark-interaction-${input.interactionId}`,
-    categoryId,
-    actionDigest: input.actionDigest,
-    ...(input.responseToken ? { responseToken: input.responseToken } : {}),
-    ...(input.imageUrl ? { avatarUrl: input.imageUrl } : {}),
-    ...(input.url ? { url: input.url } : {}),
-  };
-  return input.to.map((to) =>
-    fitPushMessage({
-      to,
+function interactionActions(input: BuildInteractionPushInput): AndroidNotificationAction[] {
+  if (input.kind === "approval") {
+    return [
+      { id: "approve", title: input.primaryLabel ?? "Approve" },
+      { id: "deny", title: input.secondaryLabel ?? "Deny", destructive: true },
+    ];
+  }
+  if (input.kind === "yes_no") {
+    return [
+      { id: "yes", title: input.primaryLabel ?? "Yes" },
+      { id: "no", title: input.secondaryLabel ?? "No" },
+    ];
+  }
+  return [{ id: "reply", title: input.primaryLabel ?? "Reply" }];
+}
+
+export function buildInteractionPushMessages(input: BuildInteractionPushInput): FcmMessage[] {
+  return input.to.map((target) =>
+    notificationMessage(target, {
+      v: PUSH_SCHEMA_VERSION,
+      kind: "notification",
+      backendOrigin: env.APP_URL,
+      targetDeviceId: target.deviceId,
+      eventId: input.eventId ?? input.interactionId,
       title: input.title,
       body: input.prompt,
-      categoryId,
-      priority: "high",
-      mutableContent: true,
-      ...(input.imageUrl ? { richContent: { image: input.imageUrl } } : {}),
-      data,
+      ...(input.imageUrl ? { avatarUrl: input.imageUrl } : {}),
+      ...(input.url ? { url: input.url } : {}),
+      interaction: {
+        id: input.interactionId,
+        kind: input.kind,
+        actionDigest: input.actionDigest,
+        responseToken: input.responseToken,
+        responseUrl: `${env.APP_URL}/api/interaction-responses/${input.interactionId}/respond`,
+        ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
+        actions: interactionActions(input),
+      },
     }),
   );
 }
 
-let expoClient: Expo | undefined;
-function getExpo(): Expo {
-  if (!expoClient) {
-    expoClient = new Expo(env.EXPO_ACCESS_TOKEN ? { accessToken: env.EXPO_ACCESS_TOKEN } : {});
-  }
-  return expoClient;
-}
+export type SendResult = FcmSendResult;
 
-export interface SendResult {
-  /** Requests accepted by Expo. This is not a device-delivery receipt. */
-  accepted: number;
-  errors: string[];
-  /** Expo push tokens that Expo reported as no longer registered. */
-  staleTokens: string[];
-}
-
-export async function sendPushMessages(messages: ExpoPushMessage[]): Promise<SendResult> {
-  const expo = getExpo();
-  const result: SendResult = { accepted: 0, errors: [], staleTokens: [] };
-
-  for (const chunk of expo.chunkPushNotifications(messages)) {
-    let tickets: ExpoPushTicket[];
-    try {
-      tickets = await expo.sendPushNotificationsAsync(chunk);
-    } catch (error) {
-      result.errors.push(error instanceof Error ? error.message : "Expo push request failed");
-      continue;
-    }
-    tickets.forEach((ticket, index) => {
-      if (ticket.status === "ok") {
-        result.accepted += 1;
-        return;
-      }
-      result.errors.push(ticket.message ?? "Unknown push error");
-      const to = chunk[index]?.to;
-      if (ticket.details?.error === "DeviceNotRegistered" && typeof to === "string") {
-        result.staleTokens.push(to);
-      }
-    });
-  }
-
-  return result;
-}
+/** Compatibility name used by existing routes during the Android migration. */
+export const sendPushMessages = sendFcmMessages;

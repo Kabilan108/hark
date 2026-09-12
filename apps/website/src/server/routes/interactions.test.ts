@@ -56,32 +56,17 @@ vi.mock("../auth", () => ({
   },
 }));
 
-vi.mock("expo-server-sdk", () => {
-  class Expo {
-    chunkPushNotifications(messages: Array<Record<string, unknown>>) {
-      return [messages];
-    }
-    async sendPushNotificationsAsync(messages: Array<Record<string, unknown>>) {
-      sent.push(...messages);
-      return messages.map(() =>
-        billingState.acceptPush
-          ? { status: "ok", id: "ticket" }
-          : { status: "error", message: "rejected" },
-      );
-    }
-  }
-  return { Expo, default: Expo };
-});
-
-vi.mock("../lib/apns", () => ({
-  isInvalidApnsTokenReason: () => false,
-  sendLiveActivityPush: async (
-    token: string,
-    environment: string,
-    input: Record<string, unknown>,
+vi.mock("../lib/fcm", () => ({
+  sendFcmMessages: async (
+    messages: ReadonlyArray<{ token: string; envelope: Record<string, unknown> }>,
   ) => {
-    liveActivityPushes.push({ token, environment, input });
-    return { status: 200, apnsId: "apns-id", reason: null, accepted: true };
+    for (const message of messages) {
+      if (message.envelope.kind === "activity") liveActivityPushes.push(message);
+      else sent.push(message);
+    }
+    return billingState.acceptPush
+      ? { accepted: messages.length, errors: [], staleTokens: [] }
+      : { accepted: 0, errors: messages.map(() => "FCM rejected"), staleTokens: [] };
   },
 }));
 
@@ -100,7 +85,6 @@ let app: typeof import("../app")["app"];
 let db: typeof import("../db")["db"];
 let schema: typeof import("../db/schema");
 let hashApiToken: typeof import("../lib/token")["hashApiToken"];
-let encryptLiveActivityToken: typeof import("../lib/token")["encryptLiveActivityToken"];
 let createLiveActivityInteractionCredential: typeof import("../lib/live-activity-interaction")["createLiveActivityInteractionCredential"];
 
 const SECRET = `hark_${"a".repeat(43)}`;
@@ -112,7 +96,7 @@ beforeAll(async () => {
   ({ app } = await import("../app"));
   ({ db } = await import("../db"));
   schema = await import("../db/schema");
-  ({ hashApiToken, encryptLiveActivityToken } = await import("../lib/token"));
+  ({ hashApiToken } = await import("../lib/token"));
   ({ createLiveActivityInteractionCredential } = await import("../lib/live-activity-interaction"));
   const { runMigrations } = await import("../db/migrate");
   runMigrations();
@@ -141,10 +125,11 @@ beforeAll(async () => {
       id: "dev_1",
       userId: "user_1",
       expoPushToken: "ExponentPushToken[a]",
-      platform: "ios",
+      fcmToken: "ExponentPushToken[a]",
+      platform: "android",
       active: true,
-      liveActivityPushToStartTokenCiphertext: encryptLiveActivityToken("ab".repeat(32)),
-      liveActivityTokenEnvironment: "sandbox",
+      notificationSchemaVersion: 1,
+      interactionSchemaVersion: 1,
       liveActivitySchemaVersion: 1,
       liveActivityInteractionVersion: 1,
       createdAt: now,
@@ -154,10 +139,11 @@ beforeAll(async () => {
       id: "dev_2",
       userId: "user_1",
       expoPushToken: "ExponentPushToken[b]",
-      platform: "ios",
+      fcmToken: "ExponentPushToken[b]",
+      platform: "android",
       active: true,
-      liveActivityPushToStartTokenCiphertext: encryptLiveActivityToken("cd".repeat(32)),
-      liveActivityTokenEnvironment: "sandbox",
+      notificationSchemaVersion: 1,
+      interactionSchemaVersion: 1,
       liveActivitySchemaVersion: 1,
       liveActivityInteractionVersion: 1,
       createdAt: now,
@@ -167,8 +153,10 @@ beforeAll(async () => {
       id: "dev_foreign",
       userId: "user_2",
       expoPushToken: "ExponentPushToken[foreign]",
-      platform: "ios",
+      fcmToken: "ExponentPushToken[foreign]",
+      platform: "android",
       active: true,
+      notificationSchemaVersion: 1,
       createdAt: now,
       lastSeenAt: now,
     },
@@ -405,10 +393,11 @@ describe("agent services", () => {
     });
     expect(webhook.status).toBe(200);
     expect(sent[0]).toMatchObject({
-      title: "Release bot",
-      body: "Release shipped",
-      richContent: { image: "https://example.com/bot.png" },
-      data: { avatarUrl: "https://example.com/bot.png" },
+      envelope: {
+        title: "Release bot",
+        body: "Release shipped",
+        avatarUrl: "https://example.com/bot.png",
+      },
     });
   });
 });
@@ -464,15 +453,59 @@ describe("interactions", () => {
       expiresInSeconds: 60,
     });
     expect(response.status).toBe(201);
-    expect(await response.json()).toMatchObject({
+    const created = (await response.json()) as {
+      interaction: { id: string; status: string };
+      accepted: number;
+    };
+    expect(created).toMatchObject({
       accepted: 2,
       interaction: { status: "pending" },
     });
     expect(sent).toHaveLength(2);
     expect(sent[0]).toMatchObject({
-      categoryId: "HARK_APPROVAL_V1",
-      data: { actionDigest: expect.stringMatching(/^[a-f0-9]{64}$/) },
+      envelope: {
+        interaction: {
+          kind: "approval",
+          actionDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+          responseToken: expect.stringMatching(/^[a-zA-Z0-9_-]{43}$/),
+        },
+      },
     });
+    const pushed = sent[0] as {
+      envelope: {
+        interaction: { responseToken: string; responseUrl: string; actionDigest: string };
+      };
+    };
+    const missingDigest = await app.request(
+      new URL(pushed.envelope.interaction.responseUrl).pathname,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "approve",
+          deviceId: "dev_1",
+          responseToken: pushed.envelope.interaction.responseToken,
+        }),
+      },
+    );
+    expect(missingDigest.status).toBe(400);
+    const nativeResponse = await app.request(
+      new URL(pushed.envelope.interaction.responseUrl).pathname,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "approve",
+          actionDigest: pushed.envelope.interaction.actionDigest,
+          deviceId: "dev_1",
+          responseToken: pushed.envelope.interaction.responseToken,
+        }),
+      },
+    );
+    expect(nativeResponse.status).toBe(200);
+    expect(await nativeResponse.json()).toEqual({ ok: true, status: "approved" });
+    const resolved = await agent(`/interactions/${created.interaction.id}`);
+    expect(await resolved.json()).toMatchObject({ interaction: { status: "approved" } });
     expect(tracked).toHaveLength(1);
   });
 
@@ -527,17 +560,20 @@ describe("interactions", () => {
 
     const firstDelivery = deliveries.find((delivery) => delivery.deviceId === "dev_1");
     expect(firstDelivery).toBeDefined();
-    const attributes = (
-      liveActivityPushes[0]?.input as { attributes?: Record<string, unknown> } | undefined
-    )?.attributes;
-    expect(attributes).toMatchObject({
-      harkInteractionId: body.interaction.id,
-      harkInteractionDeviceId: expect.any(String),
-      harkInteractionCredential: expect.stringMatching(/^[a-zA-Z0-9_-]{43}$/),
+    const interactionState = (
+      liveActivityPushes[0]?.envelope as
+        | { state?: { interaction?: Record<string, unknown> } }
+        | undefined
+    )?.state?.interaction;
+    expect(interactionState).toMatchObject({
+      id: body.interaction.id,
+      deviceId: expect.any(String),
+      deliveryId: expect.any(String),
+      actionDigest: body.interaction.actionDigest,
+      credential: expect.stringMatching(/^[a-zA-Z0-9_-]{43}$/),
+      responseUrl: `http://localhost:5173/api/live-activity-interactions/${body.interaction.id}/respond`,
     });
-    expect(
-      JSON.stringify((liveActivityPushes[0]?.input as { props?: unknown })?.props),
-    ).not.toContain("credential");
+    expect(JSON.stringify(activity?.props)).not.toContain("credential");
 
     const [interactionRow] = await db
       .select()
@@ -640,7 +676,7 @@ describe("interactions", () => {
       deviceIds: ["dev_2"],
     });
     expect(await targetedPro.json()).toMatchObject({ accepted: 1 });
-    expect(sent[0]).toMatchObject({ to: "ExponentPushToken[b]" });
+    expect(sent[0]).toMatchObject({ token: "ExponentPushToken[b]" });
   });
 
   it("enforces requester, combined account, and monthly limits before creation", async () => {
@@ -935,8 +971,7 @@ describe("interactions", () => {
     expect(row?.imageUrl).toBe("https://example.com/avatar.png");
 
     expect(sent[0]).toMatchObject({
-      richContent: { image: "https://example.com/avatar.png" },
-      data: { avatarUrl: "https://example.com/avatar.png" },
+      envelope: { avatarUrl: "https://example.com/avatar.png" },
     });
 
     const fetched = await agent(`/interactions/${body.interaction.id}`);
@@ -993,11 +1028,9 @@ describe("agent notifications", () => {
     expect(typeof body.notification.createdAt).toBe("string");
     expect(sent).toHaveLength(2);
     expect(sent[0]).toMatchObject({
-      title: "Deploy bot",
-      body: "Deploy finished",
-      richContent: { image: "https://example.com/bot.png" },
-      data: {
-        sourceName: "Deploy bot",
+      envelope: {
+        title: "Deploy bot",
+        body: "Deploy finished",
         avatarUrl: "https://example.com/bot.png",
         url: "https://example.com/runs/1",
       },
@@ -1028,7 +1061,7 @@ describe("agent notifications", () => {
     sent.length = 0;
     const routed = await createNotification({ body: "Routed", deviceIds: ["dev_2"] });
     expect(await routed.json()).toMatchObject({ accepted: 1 });
-    expect(sent[0]).toMatchObject({ to: "ExponentPushToken[b]" });
+    expect(sent[0]).toMatchObject({ token: "ExponentPushToken[b]" });
   });
 
   it("returns 429 when the monthly notification allowance is exhausted", async () => {
@@ -1050,21 +1083,21 @@ describe("agent notifications", () => {
     const first = await createNotification({ body: "One", title: "Deploy bot" });
     expect(first.status).toBe(201);
     const conversationId = String(
-      (sent[0] as { data: { conversationId: string } }).data.conversationId,
+      (sent[0] as { envelope: { conversationId: string } }).envelope.conversationId,
     );
     expect(conversationId).toMatch(/^hark-agent-tok_/);
 
     sent.length = 0;
     const sameTitle = await createNotification({ body: "Two", title: "Deploy bot" });
     expect(sameTitle.status).toBe(201);
-    expect((sent[0] as { data: { conversationId: string } }).data.conversationId).toBe(
+    expect((sent[0] as { envelope: { conversationId: string } }).envelope.conversationId).toBe(
       conversationId,
     );
 
     sent.length = 0;
     const otherTitle = await createNotification({ body: "Three", title: "Build bot" });
     expect(otherTitle.status).toBe(201);
-    expect((sent[0] as { data: { conversationId: string } }).data.conversationId).not.toBe(
+    expect((sent[0] as { envelope: { conversationId: string } }).envelope.conversationId).not.toBe(
       conversationId,
     );
 
@@ -1098,7 +1131,7 @@ describe("agent notifications", () => {
     expect(response.status).toBe(201);
     const body = (await response.json()) as { interaction: Record<string, unknown> };
     expect(body.interaction).toMatchObject({ kind: "yes_no", choices: ["yes", "no"] });
-    expect(sent[0]).toMatchObject({ data: { interactionKind: "yes_no" } });
+    expect(sent[0]).toMatchObject({ envelope: { interaction: { kind: "yes_no" } } });
   });
 
   it("replays idempotent requests without a second push and rejects changed payloads", async () => {
@@ -1125,13 +1158,13 @@ describe("agent notifications", () => {
     });
   });
 
-  it("reports accepted 0 with a message and skips usage tracking when Expo rejects", async () => {
+  it("reports accepted 0 with a message and skips usage tracking when FCM rejects", async () => {
     billingState.acceptPush = false;
     const response = await createNotification({ body: "Rejected" });
     expect(response.status).toBe(201);
     expect(await response.json()).toMatchObject({
       accepted: 0,
-      message: "No notifications were accepted by Expo.",
+      message: "No notifications were accepted by FCM.",
     });
     expect(tracked).toHaveLength(0);
   });
@@ -1167,8 +1200,8 @@ describe("agent notifications", () => {
     });
 
     // Push text is the summary; the full body never enters the push payload.
-    expect(sent[0]).toMatchObject({ body: "3 services deployed" });
-    expect(((sent[0]?.data ?? {}) as Record<string, unknown>).projectId).toBe(
+    expect(sent[0]).toMatchObject({ envelope: { body: "3 services deployed" } });
+    expect(((sent[0]?.envelope ?? {}) as Record<string, unknown>).projectId).toBe(
       body.notification.projectId,
     );
     expect(JSON.stringify(sent[0])).not.toContain("long report");

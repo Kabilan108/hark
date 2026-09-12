@@ -12,9 +12,10 @@ import { track } from "./analytics";
 
 const CACHE_TTL_MS = 60_000;
 
-const autumn = env.AUTUMN_API_KEY
-  ? new Autumn({ secretKey: env.AUTUMN_API_KEY, timeoutMs: 5_000 })
-  : null;
+const autumn =
+  !env.SELF_HOSTED_MODE && env.AUTUMN_API_KEY
+    ? new Autumn({ secretKey: env.AUTUMN_API_KEY, timeoutMs: 5_000 })
+    : null;
 
 const cache = new Map<string, { value: BillingDto; expiresAt: number }>();
 /** Per-process memo so an observed free → pro transition is recorded once. */
@@ -40,6 +41,22 @@ function freeBilling(): BillingDto {
       accountPerMinute: env.ACCOUNT_RATE_LIMIT_PER_MINUTE,
     },
     usage: { notificationsRemaining: FREE_NOTIFICATIONS },
+  };
+}
+
+function selfHostedBilling(): BillingDto {
+  return {
+    configured: false,
+    plan: "pro",
+    priceMonthly: 0,
+    features: { deviceRouting: true },
+    limits: {
+      devices: null,
+      notificationsPerMonth: PRO_NOTIFICATIONS,
+      servicePerMinute: env.PRO_SERVICE_RATE_LIMIT_PER_MINUTE,
+      accountPerMinute: env.PRO_ACCOUNT_RATE_LIMIT_PER_MINUTE,
+    },
+    usage: { notificationsRemaining: null },
   };
 }
 
@@ -153,6 +170,7 @@ export function clearBillingCache(userId: string): void {
 }
 
 export async function getBilling(user: AuthedUser, useCache = false): Promise<BillingDto> {
+  if (env.SELF_HOSTED_MODE) return selfHostedBilling();
   if (!autumn) return freeBilling();
 
   const cached = cache.get(user.id);

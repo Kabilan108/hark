@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-/** Version of the push `data` payload schema understood by the iOS extension. */
+/** Version of the data-only FCM payload schema understood by the Android app. */
 export const PUSH_SCHEMA_VERSION = 1 as const;
 
 // ---------------------------------------------------------------------------
@@ -272,6 +272,9 @@ export type WebhookResponse =
   | {
       ok: true;
       eventId: string;
+      /** Requests accepted by FCM. This does not prove display or device delivery. */
+      accepted: number;
+      /** @deprecated Compatibility alias for accepted. */
       delivered: number;
       response?: { status: "pending"; expiresAt: string };
       idempotent?: boolean;
@@ -288,6 +291,7 @@ export interface EventDto {
   imageUrl: string | null;
   url: string | null;
   status: string;
+  /** Legacy column name. Counts provider acceptance, not confirmed display. */
   deliveredCount: number;
   error: string | null;
   createdAt: string;
@@ -298,17 +302,21 @@ export interface EventDto {
 // ---------------------------------------------------------------------------
 
 export const deviceRegisterSchema = z.object({
-  expoPushToken: z.string().min(1).max(400),
-  apnsToken: z.string().min(1).max(400).optional(),
-  platform: z.literal("ios"),
+  /** Stable server-issued ID from the previous registration, used during FCM token rotation. */
+  deviceId: z.string().trim().min(1).max(100).optional(),
+  fcmToken: z.string().trim().min(1).max(4096),
+  platform: z.literal("android"),
   deviceName: z.string().trim().max(80).optional(),
+  notificationSchemaVersion: z.literal(1),
   interactionSchemaVersion: z.literal(1).optional(),
+  liveActivitySchemaVersion: z.literal(1).optional(),
   liveActivityInteractionVersion: z.literal(1).optional(),
+  promotedNotificationsCapable: z.boolean().optional(),
 });
 export type DeviceRegisterInput = z.infer<typeof deviceRegisterSchema>;
 
 export const deviceUnregisterSchema = z.object({
-  expoPushToken: z.string().min(1).max(400),
+  fcmToken: z.string().trim().min(1).max(4096),
 });
 export type DeviceUnregisterInput = z.infer<typeof deviceUnregisterSchema>;
 
@@ -340,7 +348,7 @@ export const clientAnalyticsEventSchema = z.object({
   eventId: analyticsIdentifierSchema,
   anonymousId: analyticsIdentifierSchema,
   sessionId: analyticsIdentifierSchema,
-  surface: z.enum(["web", "ios"]),
+  surface: z.enum(["web", "android"]),
   name: clientAnalyticsEventNameSchema,
   path: z
     .string()
@@ -379,13 +387,17 @@ export type AppleNativeTokenExchangeInput = z.infer<typeof appleNativeTokenExcha
 
 export interface DeviceDto {
   id: string;
-  platform: "ios";
+  platform: "android";
   deviceName: string | null;
   active: boolean;
+  notificationsCapable: boolean;
   liveActivitiesCapable: boolean;
-  liveActivityTokenEnvironment: "sandbox" | "production" | null;
-  liveActivityTokenUpdatedAt: string | null;
   interactiveLiveActivitiesCapable: boolean;
+  promotedNotificationsCapable: boolean;
+  /** @deprecated Android does not register APNs token environments. */
+  liveActivityTokenEnvironment: "sandbox" | "production" | null;
+  /** @deprecated Android activity capability is reported by schema version. */
+  liveActivityTokenUpdatedAt: string | null;
   createdAt: string;
   lastSeenAt: string;
 }
@@ -895,12 +907,14 @@ export const interactionCredentialResponseSchema = z.discriminatedUnion("action"
     action: z.enum(["approve", "deny", "yes", "no"]),
     deviceId: z.string().trim().min(1).max(100),
     responseToken: z.string().regex(/^[a-zA-Z0-9_-]{43}$/),
+    actionDigest: z.string().regex(/^[a-f0-9]{64}$/),
   }),
   z.object({
     action: z.literal("reply"),
     response: z.string().trim().min(1).max(4000),
     deviceId: z.string().trim().min(1).max(100),
     responseToken: z.string().regex(/^[a-zA-Z0-9_-]{43}$/),
+    actionDigest: z.string().regex(/^[a-f0-9]{64}$/),
   }),
 ]);
 export type InteractionCredentialResponseInput = z.infer<
@@ -970,7 +984,7 @@ export interface InboxActivityPageDto {
 
 export interface InteractionCreateResponse {
   interaction: InteractionDto;
-  /** Requests accepted by Expo or APNs, depending on presentation; not proof of device display. */
+  /** Requests accepted by FCM, not proof of device display. */
   accepted: number;
   idempotent?: boolean;
   liveActivityId?: string;
@@ -1014,7 +1028,7 @@ export interface AgentNotificationDto {
 
 export interface AgentNotificationCreateResponse {
   notification: AgentNotificationDto;
-  /** Number of notification requests accepted by Expo, not proof of device delivery. */
+  /** Number of notification requests accepted by FCM, not proof of device delivery. */
   accepted: number;
   idempotent?: boolean;
   message?: string;
@@ -1161,9 +1175,90 @@ export interface PricingPlansDto {
 }
 
 // ---------------------------------------------------------------------------
-// Push data payload (delivered to the iOS app + notification service extension)
+// Data-only FCM payloads. FCM carries the parsed object as one JSON `hark` string.
 // ---------------------------------------------------------------------------
 
+const pushEnvelopeBaseSchema = z.object({
+  v: z.literal(PUSH_SCHEMA_VERSION),
+  backendOrigin: z.url(),
+  /** Stable server device ID; native code rejects envelopes for any other installation. */
+  targetDeviceId: z.string().trim().min(1).max(100),
+});
+
+export const androidNotificationActionSchema = z.object({
+  id: z.enum(["approve", "deny", "yes", "no", "reply"]),
+  title: z.string().trim().min(1).max(24),
+  destructive: z.boolean().optional(),
+});
+export type AndroidNotificationAction = z.infer<typeof androidNotificationActionSchema>;
+
+export const androidNotificationInteractionSchema = z.object({
+  id: z.string().trim().min(1).max(100),
+  kind: interactionKindSchema,
+  actionDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  responseToken: z.string().regex(/^[a-zA-Z0-9_-]{43}$/),
+  responseUrl: z.url(),
+  expiresAt: z.iso.datetime().optional(),
+  actions: z.array(androidNotificationActionSchema).min(1).max(4),
+});
+export type AndroidNotificationInteraction = z.infer<typeof androidNotificationInteractionSchema>;
+
+export const androidNotificationEnvelopeSchema = pushEnvelopeBaseSchema.extend({
+  kind: z.literal("notification"),
+  eventId: z.string().trim().min(1).max(100),
+  title: z.string().trim().min(1).max(80),
+  body: z.string().min(1),
+  serviceId: z.string().trim().min(1).max(100).optional(),
+  conversationId: z.string().trim().min(1).max(200).optional(),
+  projectId: z.string().trim().min(1).max(100).optional(),
+  avatarUrl: z.url().optional(),
+  url: tapDestinationUrlSchema.optional(),
+  deepLink: tapDestinationUrlSchema.optional(),
+  interaction: androidNotificationInteractionSchema.optional(),
+});
+export type AndroidNotificationEnvelope = z.infer<typeof androidNotificationEnvelopeSchema>;
+
+export const androidNotificationWithdrawalEnvelopeSchema = pushEnvelopeBaseSchema.extend({
+  kind: z.literal("notification.withdraw"),
+  eventId: z.string().trim().min(1).max(100),
+});
+export type AndroidNotificationWithdrawalEnvelope = z.infer<
+  typeof androidNotificationWithdrawalEnvelopeSchema
+>;
+
+export const androidLiveActivityInteractionSchema = liveActivityInteractionSchema.extend({
+  actionDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  credential: z.string().regex(/^[a-zA-Z0-9_-]{43}$/),
+  deliveryId: z.string().trim().min(1).max(100),
+  deviceId: z.string().trim().min(1).max(100),
+  expiresAt: z.iso.datetime(),
+  responseUrl: z.url(),
+});
+export const androidLiveActivityStateSchema = liveActivityPropsSchema.safeExtend({
+  interaction: androidLiveActivityInteractionSchema.optional(),
+});
+
+export const androidActivityEnvelopeSchema = pushEnvelopeBaseSchema.extend({
+  kind: z.literal("activity"),
+  activityId: z.string().trim().min(1).max(100),
+  sequence: z.number().int().nonnegative(),
+  event: z.enum(["start", "update", "end"]),
+  state: androidLiveActivityStateSchema,
+  expiresAt: z.iso.datetime(),
+  dismissAfterSeconds: z.number().int().min(0).max(14_400).optional(),
+  title: z.string().trim().min(1).max(80).optional(),
+  deepLink: tapDestinationUrlSchema.optional(),
+});
+export type AndroidActivityEnvelope = z.infer<typeof androidActivityEnvelopeSchema>;
+
+export const harkPushEnvelopeSchema = z.discriminatedUnion("kind", [
+  androidNotificationEnvelopeSchema,
+  androidNotificationWithdrawalEnvelopeSchema,
+  androidActivityEnvelopeSchema,
+]);
+export type HarkPushEnvelope = z.infer<typeof harkPushEnvelopeSchema>;
+
+/** @deprecated iOS Expo payload kept while old source files are removed. */
 export const webhookPushDataSchema = z.object({
   v: z.literal(PUSH_SCHEMA_VERSION),
   eventId: z.string(),

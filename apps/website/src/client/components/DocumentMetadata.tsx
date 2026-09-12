@@ -1,13 +1,6 @@
 import { useEffect } from "react";
 import { useLocation } from "react-router";
-import {
-  absoluteUrl,
-  DEMO_VIDEO_URL,
-  PAGE_SEO,
-  SOCIAL_IMAGE_URL,
-  seoPageForPath,
-  structuredDataForPage,
-} from "../../shared/seo";
+import { absoluteUrl, PAGE_SEO, seoPageForPath, structuredDataForPage } from "../../shared/seo";
 
 function meta(name: string, content: string, property = false): HTMLMetaElement {
   const element = document.createElement("meta");
@@ -55,32 +48,15 @@ export function DocumentMetadata() {
       meta("og:title", seo.title, true),
       meta("og:description", seo.description, true),
       meta("og:url", canonical, true),
-      meta("og:image", SOCIAL_IMAGE_URL, true),
-      meta("og:image:type", "image/png", true),
-      meta("og:image:width", "1920", true),
-      meta("og:image:height", "1080", true),
-      meta("og:image:alt", "Hark iOS alerts, notifications, and Live Activities", true),
-      meta("twitter:card", "summary_large_image"),
+      meta("twitter:card", "summary"),
       meta("twitter:title", seo.title),
       meta("twitter:description", seo.description),
-      meta("twitter:image", SOCIAL_IMAGE_URL),
-      meta("twitter:image:alt", "Hark iOS alerts, notifications, and Live Activities"),
     );
 
     if (seo.type === "article" && seo.publishedTime) {
       document.head.append(
         meta("article:published_time", seo.publishedTime, true),
         meta("article:modified_time", seo.modifiedTime ?? seo.publishedTime, true),
-      );
-    }
-
-    if (page === "home") {
-      document.head.append(
-        meta("og:video", DEMO_VIDEO_URL, true),
-        meta("og:video:secure_url", DEMO_VIDEO_URL, true),
-        meta("og:video:type", "video/mp4", true),
-        meta("og:video:width", "1280", true),
-        meta("og:video:height", "720", true),
       );
     }
 

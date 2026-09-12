@@ -149,7 +149,7 @@ export function RouteTable({ caption, rows }: { caption: string; rows: DocRouteR
 
 /** Free-versus-Pro comparison, used for the rate-limit table. */
 /* ------------------------------------------------------------------------ */
-/* Live Activity style previews                                             */
+/* Legacy activity style previews                                           */
 /* ------------------------------------------------------------------------ */
 
 /** Palette and sample state mirror the shipping widget; illustration only. */
@@ -393,7 +393,7 @@ export function StylePreviews({ styles }: { styles: DocStylePreview[] }) {
           ) : (
             <div className="overflow-hidden rounded-2xl border border-line bg-black shadow-lg">
               <img
-                alt={`${style.name} Live Activity on the Lock Screen and Dynamic Island`}
+                alt={`${style.name} activity layout preview`}
                 className="block h-auto w-full"
                 decoding="async"
                 height={867}

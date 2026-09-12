@@ -1,8 +1,6 @@
 import type { InboxNotificationSummaryDto } from "@hark/contracts";
-import * as Device from "expo-device";
 import { Redirect, useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { SymbolView } from "expo-symbols";
 import { useCallback, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -18,6 +16,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../src/lib/api";
 import { useSession } from "../../src/lib/auth";
 import { previewNotifications, previewProjects } from "../../src/lib/inbox-preview";
+import { PREVIEW_MODE } from "../../src/lib/preview";
 import {
   canMarkAllRead,
   loadedUnreadCount,
@@ -25,6 +24,7 @@ import {
   normalizeReadThroughToken,
   projectSummaryUnread,
 } from "../../src/lib/project-inbox";
+import { SymbolView } from "../../src/lib/symbol-view";
 import { colors, fonts, tightTracking } from "../../src/lib/theme";
 
 const PAGE_SIZE = 30;
@@ -35,7 +35,7 @@ export default function ProjectScreen() {
   const params = useLocalSearchParams<{ project: string; name?: string }>();
   const projectParam = typeof params.project === "string" ? params.project : "unfiled";
   const title = typeof params.name === "string" && params.name ? params.name : "Notifications";
-  const simulatorPreview = __DEV__ && !Device.isDevice;
+  const simulatorPreview = PREVIEW_MODE;
 
   const [items, setItems] = useState<InboxNotificationSummaryDto[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -90,7 +90,7 @@ export default function ProjectScreen() {
         setLoadError(true);
       }
     },
-    [projectParam, simulatorPreview],
+    [projectParam],
   );
 
   // Reload on every focus — including the return from the detail screen,
@@ -104,7 +104,7 @@ export default function ProjectScreen() {
         loadedOnce.current = true;
         setLoading(false);
       });
-    }, [loadFirstPage, session, simulatorPreview, unreadOnly]),
+    }, [loadFirstPage, session, unreadOnly]),
   );
 
   const loadMore = async () => {

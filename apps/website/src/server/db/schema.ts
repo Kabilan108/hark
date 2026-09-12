@@ -131,10 +131,16 @@ export const device = sqliteTable("device", {
     .notNull()
     .references(() => user.id, { onDelete: "cascade" }),
   expoPushToken: text("expo_push_token").notNull().unique(),
+  /** Android delivery token. Legacy iOS rows keep this null. */
+  fcmToken: text("fcm_token").unique(),
   apnsToken: text("apns_token"),
   platform: text("platform").notNull().default("ios"),
   deviceName: text("device_name"),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
+  notificationSchemaVersion: integer("notification_schema_version"),
+  promotedNotificationsCapable: integer("promoted_notifications_capable", {
+    mode: "boolean",
+  }),
   liveActivityPushToStartTokenCiphertext: text("live_activity_push_to_start_token_ciphertext"),
   liveActivityTokenEnvironment: text("live_activity_token_environment"),
   liveActivitySchemaVersion: integer("live_activity_schema_version"),

@@ -9,7 +9,6 @@ import type {
 } from "@hark/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
-import { AppDownloadBanner } from "../components/AppDownloadBanner";
 import { useConfirm } from "../components/ConfirmDialog";
 import { CopyField } from "../components/CopyField";
 import { api } from "../lib/api";
@@ -48,7 +47,7 @@ function agentPrompt(webhookUrl: string, devices: DeviceDto[]): string {
         format: "uri",
         pattern: "^https://",
         maxLength: 2048,
-        description: "Optional avatar URL. Overrides the service default.",
+        description: "Optional service image URL. Overrides the service default.",
       },
       url: {
         type: "string",
@@ -65,8 +64,7 @@ function agentPrompt(webhookUrl: string, devices: DeviceDto[]): string {
           type: "string",
           ...(devices.length > 0 ? { enum: devices.map((device) => device.id) } : {}),
         },
-        description:
-          "Optional Hark Pro routing targets. Omit to notify every active registered device.",
+        description: "Optional routing targets. Omit to notify every active registered device.",
       },
     },
   };
@@ -90,7 +88,7 @@ function agentPrompt(webhookUrl: string, devices: DeviceDto[]): string {
       ? [
           "",
           "Registered devices:",
-          ...devices.map((device) => `- ${device.deviceName ?? "iPhone"}: ${device.id}`),
+          ...devices.map((device) => `- ${device.deviceName ?? "Android device"}: ${device.id}`),
         ]
       : []),
   ].join("\n");
@@ -240,7 +238,13 @@ export function Dashboard() {
                 onClick={() => setPlanOpen(true)}
                 className="bg-accent hover:bg-accent-hover absolute inset-y-0 left-0 z-10 min-h-10 rounded-full px-4 text-xs font-semibold text-on-accent shadow-md transition-transform active:scale-[0.96] disabled:opacity-50"
               >
-                {billingActivating ? "Activating…" : billing?.plan === "pro" ? "Pro" : "Upgrade"}
+                {billing?.configured === false
+                  ? "Self-hosted"
+                  : billingActivating
+                    ? "Activating…"
+                    : billing?.plan === "pro"
+                      ? "Pro"
+                      : "Upgrade"}
               </button>
             </div>
           </div>
@@ -248,8 +252,6 @@ export function Dashboard() {
       </header>
 
       <main className="mx-auto w-full max-w-3xl px-6 py-10">
-        <AppDownloadBanner />
-
         <div className="mb-8 flex items-end justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold">Services</h1>
@@ -257,8 +259,8 @@ export function Dashboard() {
               {deliveryDeviceCount === null
                 ? "Each service gets a secret webhook URL."
                 : deliveryDeviceCount === 0
-                  ? "No iPhone registered yet — sign in inside the Hark app to receive notifications."
-                  : `Delivering to ${deliveryDeviceCount} registered ${deliveryDeviceCount === 1 ? "iPhone" : "iPhones"}.`}
+                  ? "No Android device registered yet. Sign in inside the Hark app to receive notifications."
+                  : `Delivering to ${deliveryDeviceCount} registered Android ${deliveryDeviceCount === 1 ? "device" : "devices"}.`}
             </p>
           </div>
           <button
@@ -408,6 +410,7 @@ function PlanModal({
   activating: boolean;
   onClose: () => void;
 }) {
+  const selfHosted = billing?.configured === false;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
@@ -462,10 +465,12 @@ function PlanModal({
         <div className="flex items-start justify-between gap-6">
           <div>
             <h2 id="plans-title" className="text-xl font-semibold">
-              Choose how far Hark can reach.
+              {selfHosted ? "Self-hosted deployment" : "Choose how far Hark can reach."}
             </h2>
             <p className="mt-1 text-sm text-ink-subtle">
-              Start free, then upgrade when you need more devices or volume.
+              {selfHosted
+                ? "Every Hark feature is enabled without a subscription."
+                : "Start free, then upgrade when you need more devices or volume."}
             </p>
           </div>
           <button
@@ -479,34 +484,52 @@ function PlanModal({
           </button>
         </div>
 
-        <div className="mt-6 grid gap-3 sm:grid-cols-2">
-          <PlanTier
-            current={billing?.plan === "free"}
-            description="Everything a personal webhook setup needs."
-            features={[
-              "1 active iPhone",
-              "10,000 notifications per month",
-              "60 requests per minute per service",
-              "300 requests per minute per account",
-            ]}
-            name="Free"
-            price="$0"
-          />
-          <PlanTier
-            current={billing?.plan === "pro"}
-            description="For more devices and busier automations."
-            featured
-            features={[
-              "Unlimited active iPhones",
-              "Route notifications to specific devices",
-              "100,000 notifications per month",
-              "300 requests per minute per service",
-              "1,500 requests per minute per account",
-            ]}
-            name="Pro"
-            price="$8"
-            priceSuffix="/ month"
-          />
+        <div className={`mt-6 grid gap-3 ${selfHosted ? "" : "sm:grid-cols-2"}`}>
+          {selfHosted ? (
+            <PlanTier
+              current
+              description="Your deployment controls its own infrastructure and Firebase usage."
+              featured
+              features={[
+                "Unlimited active Android devices",
+                "Route notifications to specific devices",
+                "Interactive responses and callbacks",
+                "Live Updates",
+              ]}
+              name="Self-hosted"
+              price="$0"
+            />
+          ) : (
+            <>
+              <PlanTier
+                current={billing?.plan === "free"}
+                description="Everything a personal webhook setup needs."
+                features={[
+                  "1 active Android device",
+                  "10,000 notifications per month",
+                  "60 requests per minute per service",
+                  "300 requests per minute per account",
+                ]}
+                name="Free"
+                price="$0"
+              />
+              <PlanTier
+                current={billing?.plan === "pro"}
+                description="For more devices and busier automations."
+                featured
+                features={[
+                  "Unlimited active Android devices",
+                  "Route notifications to specific devices",
+                  "100,000 notifications per month",
+                  "300 requests per minute per service",
+                  "1,500 requests per minute per account",
+                ]}
+                name="Pro"
+                price="$8"
+                priceSuffix="/ month"
+              />
+            </>
+          )}
         </div>
 
         {activating ? (
@@ -517,22 +540,32 @@ function PlanModal({
         {error ? <p className="mt-3 text-sm text-danger">{error}</p> : null}
 
         <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-xs text-ink-faint">Cancel anytime.</p>
+          <p className="text-xs text-ink-faint">
+            {selfHosted ? "No Hark billing account is required." : "Cancel anytime."}
+          </p>
           <button
             type="button"
-            disabled={busy || billing === null || !billing.configured || activating}
-            onClick={() => void redirectToBilling(billing?.plan === "pro" ? "portal" : "checkout")}
+            disabled={
+              !selfHosted && (busy || billing === null || !billing.configured || activating)
+            }
+            onClick={
+              selfHosted
+                ? close
+                : () => void redirectToBilling(billing?.plan === "pro" ? "portal" : "checkout")
+            }
             className="bg-accent hover:bg-accent-hover min-h-11 rounded-full px-5 text-sm font-semibold text-on-accent transition-transform active:scale-[0.96] disabled:opacity-50"
           >
-            {busy
-              ? "Opening…"
-              : activating
-                ? "Activating…"
-                : billing?.configured === false
-                  ? "Billing unavailable"
-                  : billing?.plan === "pro"
-                    ? "Manage billing"
-                    : "Upgrade to Pro · $8/month"}
+            {selfHosted
+              ? "Done"
+              : busy
+                ? "Opening…"
+                : activating
+                  ? "Activating…"
+                  : billing?.configured === false
+                    ? "Billing unavailable"
+                    : billing?.plan === "pro"
+                      ? "Manage billing"
+                      : "Upgrade to Pro · $8/month"}
           </button>
         </div>
       </section>
@@ -608,8 +641,8 @@ function Devices({
 
   const remove = async (device: DeviceDto) => {
     const confirmed = await confirm({
-      title: "Remove iPhone",
-      message: `Remove ${device.deviceName ?? "this iPhone"} from Hark? It stops receiving notifications until it signs in from the app again.`,
+      title: "Remove Android device",
+      message: `Remove ${device.deviceName ?? "this Android device"} from Hark? It stops receiving notifications until it signs in from the app again.`,
       confirmLabel: "Remove",
       destructive: true,
     });
@@ -640,7 +673,7 @@ function Devices({
       {devices === null ? <p className="py-6 text-sm text-ink-faint">Loading devices…</p> : null}
       {devices?.length === 0 ? (
         <p className="border-y border-line py-8 text-sm text-ink-faint">
-          No iPhones registered yet.
+          No Android devices registered yet.
         </p>
       ) : null}
       {devices && devices.length > 0 ? (
@@ -649,7 +682,7 @@ function Devices({
             <li className="flex items-center justify-between gap-4 py-3" key={device.id}>
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium">
-                  {device.deviceName ?? "iPhone"}
+                  {device.deviceName ?? "Android device"}
                   {!device.active ? (
                     <span className="ml-2 text-xs text-ink-faint">Inactive</span>
                   ) : null}
@@ -657,10 +690,8 @@ function Devices({
                 <p className="truncate font-mono text-[11px] text-ink-faint">{device.id}</p>
                 <p className="mt-0.5 text-[11px] text-ink-faint">
                   {device.liveActivitiesCapable
-                    ? `Live Activities ready · ${device.liveActivityTokenEnvironment} · refreshed ${new Date(
-                        device.liveActivityTokenUpdatedAt ?? device.lastSeenAt,
-                      ).toLocaleString()}`
-                    : "Live Activities token not registered"}
+                    ? `Live Updates ready · refreshed ${new Date(device.lastSeenAt).toLocaleString()}`
+                    : "Live Updates unavailable"}
                 </p>
               </div>
               <div className="flex shrink-0 gap-2">
@@ -686,7 +717,7 @@ function Devices({
       ) : null}
       {billing?.plan === "free" && activeDevices.length >= 1 ? (
         <p className="mt-3 text-xs text-ink-faint">
-          Free includes one active iPhone. Upgrade to Pro before registering another.
+          Free includes one active Android device. Upgrade to Pro before registering another.
         </p>
       ) : null}
       {error ? <p className="mt-3 text-xs text-danger">{error}</p> : null}
@@ -829,7 +860,7 @@ function ServiceModal({
           </label>
           <label className="block">
             <span className="mb-1.5 block text-xs font-medium text-ink-subtle">
-              Avatar image URL <span className="font-normal">(optional)</span>
+              Service image URL <span className="font-normal">(optional)</span>
             </span>
             <input
               className={inputClass}
@@ -851,7 +882,7 @@ function ServiceModal({
               placeholder="https://example.com/dashboard"
             />
             <span className="mt-1.5 block text-xs text-ink-faint">
-              Supports web URLs, app deep links, and shortcuts://run-shortcut URLs.
+              Supports web URLs and app deep links handled by an installed Android app.
             </span>
           </label>
         </div>
@@ -889,7 +920,7 @@ function LiveActivities({ activities }: { activities: LiveActivityDto[] | null }
   return (
     <section className="mt-16" aria-labelledby="live-activities-heading">
       <h2 id="live-activities-heading" className="text-lg font-semibold">
-        Live Activities
+        Live Updates
       </h2>
       <ul className="mt-4 divide-y divide-line border-y border-line">
         {activities.map((activity) => (

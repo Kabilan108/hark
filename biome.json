@@ -10,6 +10,7 @@
       "!**/dist",
       "!**/drizzle",
       "!**/.expo",
+      "!**/.direnv",
       "!**/ios",
       "!**/android",
       "!**/data",

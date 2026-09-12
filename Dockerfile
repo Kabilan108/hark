@@ -32,6 +32,7 @@ RUN pnpm --filter @hark/website-runtime deploy --prod --legacy /out
 FROM node:22-trixie-slim AS runtime
 ENV NODE_ENV=production
 ENV PORT=8787
+ENV HOST=0.0.0.0
 ENV DATABASE_URL=/data/hark.sqlite
 WORKDIR /app
 COPY --from=build --chown=node:node /out/node_modules ./node_modules

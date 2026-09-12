@@ -41,7 +41,7 @@ if (existsSync(clientDir)) {
   app.use("*", serveStatic({ root: "./dist/client" }));
 }
 
-const server = serve({ fetch: app.fetch, port: env.PORT }, (info) => {
+const server = serve({ fetch: app.fetch, hostname: env.HOST, port: env.PORT }, (info) => {
   console.log(`Hark API listening on http://localhost:${info.port} (${env.NODE_ENV})`);
   if (!existsSync(clientDir)) {
     console.log("No dist/client build found — expecting the Vite dev server to proxy /api.");

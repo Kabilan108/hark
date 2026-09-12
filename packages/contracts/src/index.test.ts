@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   agentNotificationCreateSchema,
+  androidActivityEnvelopeSchema,
+  androidNotificationEnvelopeSchema,
   appleNativeTokenExchangeSchema,
   deviceRegisterSchema,
   inboxMarkAllReadSchema,
@@ -539,17 +541,78 @@ describe("serviceCreateSchema", () => {
 });
 
 describe("deviceRegisterSchema", () => {
-  it("constrains platform to ios", () => {
+  it("requires an Android FCM token and notification schema version", () => {
     expect(
-      deviceRegisterSchema.safeParse({ expoPushToken: "ExponentPushToken[x]", platform: "ios" })
-        .success,
+      deviceRegisterSchema.safeParse({
+        fcmToken: "fcm-token",
+        platform: "android",
+        notificationSchemaVersion: 1,
+        liveActivitySchemaVersion: 1,
+        promotedNotificationsCapable: true,
+      }).success,
     ).toBe(true);
     expect(
       deviceRegisterSchema.safeParse({
-        expoPushToken: "ExponentPushToken[x]",
-        platform: "android",
+        fcmToken: "fcm-token",
+        platform: "ios",
+        notificationSchemaVersion: 1,
       }).success,
     ).toBe(false);
+    expect(
+      deviceRegisterSchema.safeParse({ fcmToken: "fcm-token", platform: "android" }).success,
+    ).toBe(false);
+  });
+});
+
+describe("Android FCM envelopes", () => {
+  it("validates render-complete notification and activity data", () => {
+    expect(
+      androidNotificationEnvelopeSchema.safeParse({
+        v: 1,
+        kind: "notification",
+        backendOrigin: "https://sietch.sole-pierce.ts.net:8443",
+        targetDeviceId: "dev_a",
+        eventId: "evt_1",
+        title: "Release",
+        body: "Deploy?",
+        interaction: {
+          id: "int_1",
+          kind: "approval",
+          actionDigest: "a".repeat(64),
+          responseToken: "r".repeat(43),
+          responseUrl:
+            "https://sietch.sole-pierce.ts.net:8443/api/interaction-responses/int_1/respond",
+          expiresAt: "2026-09-12T09:00:00.000Z",
+          actions: [
+            { id: "approve", title: "Approve" },
+            { id: "deny", title: "Deny", destructive: true },
+          ],
+        },
+      }).success,
+    ).toBe(true);
+
+    expect(
+      androidActivityEnvelopeSchema.safeParse({
+        v: 1,
+        kind: "activity",
+        backendOrigin: "https://sietch.sole-pierce.ts.net:8443",
+        targetDeviceId: "dev_a",
+        activityId: "act_1",
+        sequence: 2,
+        event: "update",
+        state: {
+          schemaVersion: 1,
+          activityId: "act_1",
+          title: "Build",
+          status: "Running",
+          progress: 0.5,
+          updatedAt: "2026-09-12T08:00:00.000Z",
+          symbol: "build",
+          privacyMode: "standard",
+        },
+        expiresAt: "2026-09-12T09:00:00.000Z",
+      }).success,
+    ).toBe(true);
   });
 });
 

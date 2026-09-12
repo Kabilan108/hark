@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+avd_name="${HARK_ANDROID_AVD:-hark-pixel9-api37}"
+image="system-images;android-37.0;google_apis;x86_64"
+
+: "${ANDROID_AVD_HOME:?Run this command through the project dev shell}"
+mkdir -p "$ANDROID_AVD_HOME"
+
+config="$ANDROID_AVD_HOME/$avd_name.avd/config.ini"
+
+validate_avd() {
+  [[ -f "$config" ]] &&
+    grep -qxF 'hw.device.name=pixel_9' "$config" &&
+    grep -qxF 'target=android-37.0' "$config"
+}
+
+if [[ -e "$ANDROID_AVD_HOME/$avd_name.ini" || -d "$ANDROID_AVD_HOME/$avd_name.avd" ]]; then
+  if ! validate_avd; then
+    printf 'Existing AVD %s is not the expected Pixel 9 API 37 configuration\n' "$avd_name" >&2
+    exit 1
+  fi
+  printf 'Reusing AVD %s\n' "$avd_name"
+  exit 0
+fi
+
+printf 'no\n' | avdmanager create avd \
+  --force \
+  --name "$avd_name" \
+  --package "$image" \
+  --device pixel_9
+
+if ! validate_avd; then
+  printf 'AVD %s was not created with the expected Pixel 9 API 37 configuration\n' "$avd_name" >&2
+  exit 1
+fi
+
+printf 'Created AVD %s from %s\n' "$avd_name" "$image"

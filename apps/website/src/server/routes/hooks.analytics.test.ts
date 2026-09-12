@@ -26,19 +26,13 @@ vi.mock("../lib/billing", () => ({
   createBillingPortal: async () => "https://example.com/portal",
 }));
 
-vi.mock("expo-server-sdk", () => {
-  class Expo {
-    // biome-ignore lint/complexity/noUselessConstructor: mock parity with the SDK
-    constructor(_options?: unknown) {}
-    chunkPushNotifications(messages: Array<Record<string, unknown>>) {
-      return [messages];
-    }
-    async sendPushNotificationsAsync(chunk: Array<Record<string, unknown>>) {
-      return chunk.map(() => ({ status: "ok", id: "ticket" }));
-    }
-  }
-  return { Expo, default: Expo };
-});
+vi.mock("../lib/fcm", () => ({
+  sendFcmMessages: async (messages: Array<Record<string, unknown>>) => ({
+    accepted: messages.length,
+    errors: [],
+    staleTokens: [],
+  }),
+}));
 
 let app: typeof import("../app")["app"];
 let db: typeof import("../db")["db"];
@@ -79,7 +73,9 @@ beforeAll(async () => {
     id: "dev_analytics",
     userId: "user_analytics",
     expoPushToken: "ExponentPushToken[analytics]",
-    platform: "ios",
+    fcmToken: "fcm-analytics",
+    platform: "android",
+    notificationSchemaVersion: 1,
     active: true,
     createdAt: now,
     lastSeenAt: now,

@@ -182,7 +182,7 @@ export const previewNotifications: InboxNotificationSummaryDto[] = Array.from(
     preview:
       index % 3 === 0
         ? "Deploy finished: 3 services updated, 0 rollbacks"
-        : "Integration tests passed on iOS and web targets",
+        : "Integration tests passed on Android and web targets",
     url: null,
     bodyFormat: "text" as const,
     readAt: index < 3 ? null : new Date(now - index * 50 * 60_000).toISOString(),

@@ -16,8 +16,6 @@ import {
 } from "./content";
 import { docLabel } from "./nav";
 
-const PRO_LINE = "**Hark Pro** — requires a paid plan.";
-
 /** Pipe tables cannot contain a raw `|` or a newline. */
 function cell(text: string): string {
   return text.replace(/\s*\n\s*/g, " ").replaceAll("|", "\\|");
@@ -87,12 +85,10 @@ export function docsMarkdown(): string {
 
   for (const section of DOC_CONTENT) {
     parts.push(`## ${docLabel(section.id)}`);
-    if (section.pro) parts.push(PRO_LINE);
     parts.push(section.lead);
 
     for (const subsection of section.subsections) {
       parts.push(`### ${docLabel(subsection.id)}`);
-      if (subsection.pro) parts.push(PRO_LINE);
       for (const block of subsection.blocks) parts.push(blockToMarkdown(block));
     }
   }
@@ -104,34 +100,32 @@ export function docsMarkdown(): string {
 export function llmsTxt(): string {
   return `# Hark
 
-> Hark turns an HTTP request into a source-branded iPhone notification. Create a service in the
-> dashboard, then POST JSON to its secret webhook URL. A Notification API sends one-shot pushes and
-> optional approval prompts; an Activity API drives a stateful Live Activity on the Lock Screen and
-> in the Dynamic Island.
+> Hark turns an HTTP request into an Android notification. Create a service in the dashboard, then
+> POST JSON to its secret webhook URL. The Notification API sends one-shot pushes and optional
+> response prompts. The Activity API drives an ongoing progress notification and requests promoted
+> Live Update treatment on supported Android devices.
 
 ## Docs
 
 - [Documentation](${DOCS_URL}): ${DOCS_TITLE} — quickstart, Notification API, Activity API, CLI, and coding-agent permissions.
 - [Documentation as markdown](${DOCS_MARKDOWN_URL}): the same content as plain markdown.
-- [Agent documentation](https://hark.ryan.ceo/agents.md): agent-oriented alias of the complete Markdown docs.
-- [Coding-agent permission setup](https://hark.ryan.ceo/docs#cli-permissions): Claude Code, Codex, OpenCode V1, and OpenCode V2.
+- [Agent documentation](https://sietch.sole-pierce.ts.net:8443/agents.md): agent-oriented alias of the complete Markdown docs.
+- [Coding-agent permission setup](https://sietch.sole-pierce.ts.net:8443/docs#cli-permissions): Claude Code, Codex, OpenCode V1, and OpenCode V2.
 
 ## Product
 
-- [Home](https://hark.ryan.ceo/): product overview and webhook example.
-- [Pricing](https://hark.ryan.ceo/pricing): current Free and Pro capabilities.
-- [Hark for iPhone](https://apps.apple.com/us/app/hark-developer-notifications/id6794121509): required iOS app.
-- [Source](https://github.com/R44VC0RP/hark): Hark website, iOS app, CLI, and agent skill.
+- [Home](https://sietch.sole-pierce.ts.net:8443/): product overview and webhook example.
+- [Pricing](https://sietch.sole-pierce.ts.net:8443/pricing): self-hosting requirements and included features.
 
 ## Agent tools
 
-- [Hark agent skill](https://skills.sh/r44vc0rp/hark/hark): install Hark for compatible coding agents.
-- [harkctl](https://www.npmjs.com/package/harkctl): CLI for notifications, approvals, replies, Live Activities, and webhook services.
+- \`node packages/harkctl/bin/harkctl.mjs\`: run the CLI from this fork for notifications, approvals, replies, Activity API updates, and webhook services.
 
 ## Notes
 
 - Webhook API requests are authenticated by the token in the URL; harkctl uses a scoped agent token. Treat both as credentials.
-- Webhook device targeting, webhook interactive responses, and the webhook Activity API require Hark Pro.
-- Agent-token CLI asks and task Live Activities work on Free with the one-device limit; targeted or multi-device routing requires Pro.
+- Self-hosted mode enables device targeting, interactive responses, callbacks, and the Activity API for every account.
+- Hark sends data-only messages directly through FCM. Provider acceptance does not prove that Android displayed a notification.
+- Set \`HARK_API_URL\` when the CLI should use a backend other than its built-in self-hosted default.
 `;
 }
