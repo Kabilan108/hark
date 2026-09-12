@@ -5,7 +5,7 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "$script_dir/.." && pwd)"
 signing_properties="${HARK_ANDROID_SIGNING_PROPERTIES:-/vault/userdata/hark/secrets/android-release-signing.properties}"
 architectures="${HARK_ANDROID_ARCHITECTURES:-arm64-v8a,x86_64}"
-output_apk="${HARK_ANDROID_RELEASE_APK:-/vault/userdata/hark/builds/hark-android-release.apk}"
+output_apk="${HARK_ANDROID_RELEASE_APK:-}"
 configure_only=false
 
 if [[ "${1:-}" == "--configure-only" ]]; then
@@ -38,6 +38,20 @@ if (( (8#$properties_mode & 077) != 0 )); then
 fi
 
 cd "$repo_root"
+if [[ -z "$output_apk" ]]; then
+  app_version="$(corepack pnpm --filter @hark/expo exec expo config --json | node -e '
+    let input = "";
+    process.stdin.on("data", chunk => input += chunk);
+    process.stdin.on("end", () => {
+      const version = JSON.parse(input).version;
+      if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$/.test(version)) {
+        throw new Error("Invalid APK version");
+      }
+      process.stdout.write(version);
+    });
+  ')"
+  output_apk="/vault/userdata/hark/builds/hark-android-$app_version.apk"
+fi
 corepack pnpm --filter @hark/expo exec expo prebuild -p android --clean --no-install
 
 build_gradle="$repo_root/apps/expo/android/app/build.gradle"

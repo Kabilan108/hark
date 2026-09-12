@@ -33,11 +33,10 @@ Build a signed standalone APK with the maintained release script:
 ```sh
 direnv exec "$PWD" env \
   HARK_ANDROID_SIGNING_PROPERTIES=/vault/userdata/hark/secrets/android-release-signing.properties \
-  HARK_ANDROID_RELEASE_APK=/vault/userdata/hark/builds/hark-android-release.apk \
   scripts/android-build-release
 ```
 
-The signing properties file must remain outside the repository with mode `600`. It uses Java properties syntax and contains `HARK_RELEASE_STORE_FILE`, `HARK_RELEASE_STORE_PASSWORD`, `HARK_RELEASE_KEY_ALIAS`, and `HARK_RELEASE_KEY_PASSWORD`. The script runs a clean Expo Android prebuild, adds release signing to the generated Gradle project, builds `arm64-v8a` and `x86_64`, verifies the APK signature, and copies the APK to `HARK_ANDROID_RELEASE_APK`. It passes Gradle the properties-file path without putting passwords on the command line. Keep the keystore and properties file together in a private backup. Losing the keystore prevents signing an upgrade for an installed release.
+The signing properties file must remain outside the repository with mode `600`. It uses Java properties syntax and contains `HARK_RELEASE_STORE_FILE`, `HARK_RELEASE_STORE_PASSWORD`, `HARK_RELEASE_KEY_ALIAS`, and `HARK_RELEASE_KEY_PASSWORD`. The script runs a clean Expo Android prebuild, adds release signing to the generated Gradle project, builds `arm64-v8a` and `x86_64`, verifies the APK signature, and copies the APK to `/vault/userdata/hark/builds/hark-android-<version>.apk`. Set `HARK_ANDROID_RELEASE_APK` to override that destination. It passes Gradle the properties-file path without putting passwords on the command line. Keep the keystore and properties file together in a private backup. Losing the keystore prevents signing an upgrade for an installed release.
 
 To regenerate and inspect the signed Gradle configuration without compiling an APK, use:
 
@@ -63,4 +62,23 @@ Use SQLite's online backup operation while the process runs. Do not copy only th
 
 `deploy/hark.service` runs this checkout through its Nix environment and `scripts/start-backend`, with automatic restart on failure. It assumes the checkout is at `~/experiments/hark` and the backend environment is linked at `.env`. Install the unit into `~/.config/systemd/user/`, then use `systemctl --user enable --now hark`. Stop any existing process on port 8787 first. Sietch has user lingering enabled, so the service can start without an interactive login.
 
-After a backend build, restart with `systemctl --user restart hark`. Logs are available through `journalctl --user -u hark`. Copy the verified release APK into `apps/website/dist/client/downloads/hark-android.apk` after each web build to serve the private installation link at `/downloads/hark-android.apk`.
+After a backend build, restart with `systemctl --user restart hark`. Logs are available through `journalctl --user -u hark`. Copy the verified release APK into `apps/website/dist/client/downloads/hark-android-<version>.apk` after each web build, preserving the version suffix in the download URL. The current release is `/downloads/hark-android-1.2.1.apk`.
+
+## NixOS service on sietch
+
+The dotfiles module `~/dotfiles/modules/nixos/selfhost/hark.nix` declares a system service and `selfhost.tailnetServices.hark.port = 8787`. After activation, Tailscale Services advertises `https://hark.sole-pierce.ts.net` and proxies to the loopback backend. The existing host endpoint on port 8443 and T3's port 443 mapping remain in place.
+
+The system service runs Node 24 against this checkout's built website. It reads `/vault/userdata/hark/secrets/backend.env` and uses the existing SQLite data. It does not build the application during boot. Keep the checkout, dependencies, built assets, and private environment file available. Secrets stay outside the Nix store.
+
+Activate from your terminal after reviewing the dotfiles changes. Stop the old user service first to free port 8787:
+
+```sh
+systemctl --user disable --now hark
+sudo nixos-rebuild switch --flake ~/dotfiles#sietch
+systemctl status hark
+curl --fail https://hark.sole-pierce.ts.net/api/health
+```
+
+If activation fails before the system service takes over, restore the old service with `systemctl --user enable --now hark`. After migration, use `sudo systemctl restart hark` and `journalctl -u hark` instead of the user-service commands above.
+
+The installed Android app and Google OAuth still use the existing port-8443 origin. The new service can carry webhooks and API traffic after activation. Moving the canonical sign-in URL requires adding `https://hark.sole-pierce.ts.net/api/auth/callback/google` to the Google OAuth client, changing backend `APP_URL` and the app's `EXPO_PUBLIC_API_URL`, and building a new APK. Do that after the new endpoint is reachable; using the new hostname for browser sign-in before this migration is not supported.

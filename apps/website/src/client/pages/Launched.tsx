@@ -28,7 +28,7 @@ export function Launched() {
           </p>
           <a
             className="mt-7 inline-flex min-h-11 items-center justify-center rounded-full bg-accent px-6 py-3 text-sm font-semibold text-on-accent transition-[background-color,scale] hover:bg-accent-hover active:scale-[0.96]"
-            href="/downloads/hark-android.apk"
+            href="/downloads/hark-android-1.2.1.apk"
           >
             Download signed Android APK
           </a>
