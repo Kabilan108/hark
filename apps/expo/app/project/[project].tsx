@@ -25,11 +25,12 @@ import {
   projectSummaryUnread,
 } from "../../src/lib/project-inbox";
 import { SymbolView } from "../../src/lib/symbol-view";
-import { colors, fonts, tightTracking } from "../../src/lib/theme";
+import { createThemedStyles, fonts, tightTracking } from "../../src/lib/theme";
 
 const PAGE_SIZE = 30;
 
 export default function ProjectScreen() {
+  const { colors, statusBarStyle, styles } = useStyles();
   const { data: session, isPending: sessionPending } = useSession();
   const router = useRouter();
   const params = useLocalSearchParams<{ project: string; name?: string }>();
@@ -174,7 +175,7 @@ export default function ProjectScreen() {
 
   return (
     <SafeAreaView edges={["top"]} style={styles.container}>
-      <StatusBar style="dark" />
+      <StatusBar style={statusBarStyle} />
       <View style={styles.header}>
         <Pressable
           accessibilityLabel="Back"
@@ -285,6 +286,7 @@ function NotificationRow({
   item: InboxNotificationSummaryDto;
   onPress: () => void;
 }) {
+  const { styles } = useStyles();
   const unread = item.readAt === null;
   return (
     <Pressable
@@ -320,7 +322,7 @@ function formatTime(value: string): string {
   return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-const styles = StyleSheet.create({
+const useStyles = createThemedStyles((colors) => ({
   container: {
     flex: 1,
     backgroundColor: colors.paper,
@@ -351,7 +353,7 @@ const styles = StyleSheet.create({
     opacity: 0.4,
   },
   iconButtonPressed: {
-    backgroundColor: "#F0EFEC",
+    backgroundColor: colors.pressed,
     transform: [{ scale: 0.96 }],
   },
   filterRow: {
@@ -465,4 +467,4 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     letterSpacing: tightTracking(11),
   },
-});
+}));

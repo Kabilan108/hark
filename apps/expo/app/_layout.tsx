@@ -6,16 +6,18 @@ import {
 } from "@expo-google-fonts/inter";
 import { Stack, usePathname } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
+import * as SystemUI from "expo-system-ui";
 import { useEffect } from "react";
 import { AppState } from "react-native";
 import { trackAppEvent } from "../src/lib/analytics";
 import { useSession } from "../src/lib/auth";
 import { reconcileDeviceRegistration } from "../src/lib/device";
 import { flushInteractionResponses } from "../src/lib/interactions";
-import { colors } from "../src/lib/theme";
+import { useAppTheme } from "../src/lib/theme";
 
 void SplashScreen.preventAutoHideAsync();
 export default function RootLayout() {
+  const { colors } = useAppTheme();
   const { data: session } = useSession();
   const pathname = usePathname();
   const [fontsLoaded, fontError] = useFonts({
@@ -27,6 +29,10 @@ export default function RootLayout() {
   useEffect(() => {
     if (fontsLoaded || fontError) void SplashScreen.hideAsync();
   }, [fontsLoaded, fontError]);
+
+  useEffect(() => {
+    void SystemUI.setBackgroundColorAsync(colors.paper);
+  }, [colors.paper]);
 
   useEffect(() => {
     void trackAppEvent("app_open");

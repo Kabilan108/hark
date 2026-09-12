@@ -39,3 +39,9 @@ A final real System UI Unpin check also passed. Unpin persisted the activity's d
 ## Remaining phone coverage
 
 Pixel 9 installation, Google sign-in on the physical phone, manufacturer presentation of Live Updates, lock-screen behavior, and battery/Doze behavior need user-assisted testing. Android renders activities using its standard progress layout; Apple-specific visual skins, source avatars, and native service threading are not ported.
+
+## Dark mode update, version 1.2.1
+
+Version code 2 follows the Android system theme across app screens, status bars, and the native root background, with a dark splash background. Expo type checking, scoped Biome checks, and the signed dual-ABI release build passed. Installing over the previous emulator release preserved login. Dark inbox and settings were inspected, and switching an open settings screen back to light mode updated its colors and status bar without restarting the app.
+
+The download now serves `/vault/userdata/hark/builds/hark-1.2.1-android-release.apk`, SHA-256 `9db6ce72f13eb1fc7170ffbaa5de03713987f5ab1a5e0266ebe2c56beeeb0969`. The earlier 1.2.0 artifact remains archived.

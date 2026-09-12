@@ -1,14 +1,15 @@
 import { Redirect } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { trackAppEvent } from "../src/lib/analytics";
 import { authClient, useSession } from "../src/lib/auth";
 import { PREVIEW_MODE } from "../src/lib/preview";
-import { colors, fonts, tightTracking } from "../src/lib/theme";
+import { createThemedStyles, fonts, tightTracking } from "../src/lib/theme";
 
 export default function SignInScreen() {
+  const { colors, statusBarStyle, styles } = useStyles();
   const { data: session, isPending } = useSession();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,7 +34,7 @@ export default function SignInScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar style="dark" />
+      <StatusBar style={statusBarStyle} />
       <View style={styles.header}>
         <View style={styles.brandMark} />
         <Text style={styles.brand}>Hark</Text>
@@ -60,7 +61,7 @@ export default function SignInScreen() {
             ]}
           >
             {busy ? (
-              <ActivityIndicator color="#FFFFFF" />
+              <ActivityIndicator color={colors.onAccent} />
             ) : (
               <Text style={styles.googleButtonText}>Continue with Google</Text>
             )}
@@ -72,7 +73,7 @@ export default function SignInScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createThemedStyles((colors) => ({
   container: {
     flex: 1,
     paddingHorizontal: 24,
@@ -136,7 +137,7 @@ const styles = StyleSheet.create({
     transform: [{ scale: 0.98 }],
   },
   googleButtonText: {
-    color: "#FFFFFF",
+    color: colors.onAccent,
     fontFamily: fonts.medium,
     fontSize: 16,
     letterSpacing: tightTracking(16),
@@ -147,4 +148,4 @@ const styles = StyleSheet.create({
     fontSize: 13,
     letterSpacing: tightTracking(13),
   },
-});
+}));

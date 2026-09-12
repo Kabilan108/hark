@@ -37,7 +37,7 @@ import { createFocusRefreshPolicy, createRefreshSequence } from "../src/lib/inbo
 import { DEVICE_ID_KEY, submitInteractionResponse } from "../src/lib/interactions";
 import { PREVIEW_MODE } from "../src/lib/preview";
 import { SymbolView } from "../src/lib/symbol-view";
-import { colors, fonts, tightTracking } from "../src/lib/theme";
+import { createThemedStyles, fonts, tightTracking } from "../src/lib/theme";
 
 type ActivityFilter = "all" | InboxActivityKind;
 
@@ -47,6 +47,7 @@ const PLACEHOLDER_AVATAR_URL =
 const ACTIVITY_PAGE_SIZE = 20;
 
 export default function InboxScreen() {
+  const { colors, statusBarStyle, styles } = useStyles();
   const { data: session, isPending: sessionPending } = useSession();
   const router = useRouter();
   const scrollRef = useRef<ScrollView>(null);
@@ -256,7 +257,7 @@ export default function InboxScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
-      <StatusBar style="dark" />
+      <StatusBar style={statusBarStyle} />
       <KeyboardAvoidingView style={styles.container}>
         <ScrollView
           ref={scrollRef}
@@ -468,6 +469,7 @@ function ActivityPicker({
   value: ActivityFilter;
   onChange: (value: ActivityFilter) => void;
 }) {
+  const { styles } = useStyles();
   const options: Array<{ label: string; value: ActivityFilter }> = [
     { label: "All", value: "all" },
     { label: "Notifications", value: "notification" },
@@ -515,6 +517,7 @@ function Pagination({
   total: number;
   onPageChange: (page: number) => void;
 }) {
+  const { colors, styles } = useStyles();
   const start = page * ACTIVITY_PAGE_SIZE + 1;
   const end = Math.min((page + 1) * ACTIVITY_PAGE_SIZE, total);
   return (
@@ -573,6 +576,7 @@ function PendingRow({
   onResolve: (action: "approve" | "deny" | "yes" | "no" | "reply", response?: string) => void;
   responding: boolean;
 }) {
+  const { colors, styles } = useStyles();
   return (
     <View style={[styles.pendingRow, first && styles.firstRow]}>
       <View style={styles.itemLayout}>
@@ -649,7 +653,7 @@ function PendingRow({
                 pressed && reply.trim() && !responding && styles.buttonPressed,
               ]}
             >
-              <SymbolView name="arrow.up" size={15} tintColor="#FFFFFF" weight="semibold" />
+              <SymbolView name="arrow.up" size={15} tintColor={colors.onAccent} weight="semibold" />
             </Pressable>
           </View>
         </View>
@@ -697,6 +701,7 @@ function ProjectGroup({
     response?: string,
   ) => void;
 }) {
+  const { styles } = useStyles();
   const hasLiveContent = pending.length > 0 || active.length > 0;
   return (
     <View style={styles.projectGroup}>
@@ -740,6 +745,7 @@ function ProjectInteraction({
   onCancelReply: () => void;
   onResolve: (action: "approve" | "deny" | "yes" | "no" | "reply", response?: string) => void;
 }) {
+  const { colors, styles } = useStyles();
   const actionButtons =
     item.kind === "approval" ? (
       <View style={styles.projectActionButtons}>
@@ -823,7 +829,7 @@ function ProjectInteraction({
                 pressed && reply.trim() && !responding && styles.buttonPressed,
               ]}
             >
-              <SymbolView name="arrow.up" size={15} tintColor="#FFFFFF" weight="semibold" />
+              <SymbolView name="arrow.up" size={15} tintColor={colors.onAccent} weight="semibold" />
             </Pressable>
           </View>
         </View>
@@ -843,6 +849,7 @@ function ProjectInteraction({
 }
 
 function ProjectActivity({ item }: { item: InboxLiveActivityDto }) {
+  const { styles } = useStyles();
   const progress = item.props.progress;
   return (
     <View style={styles.projectChild}>
@@ -871,6 +878,7 @@ function ProjectRow({
   onPress: () => void;
   showPreview: boolean;
 }) {
+  const { colors, styles } = useStyles();
   return (
     <Pressable
       accessibilityRole="button"
@@ -907,6 +915,7 @@ function ProjectRow({
 }
 
 function ProjectThumbnail({ name, url }: { name: string; url?: string | null }) {
+  const { styles } = useStyles();
   if (url) {
     return (
       <Image
@@ -924,6 +933,7 @@ function ProjectThumbnail({ name, url }: { name: string; url?: string | null }) 
 }
 
 function ActiveRow({ item, first }: { item: InboxLiveActivityDto; first: boolean }) {
+  const { styles } = useStyles();
   const progress = item.props.progress;
   return (
     <View style={[styles.activeRow, first && styles.firstRow]}>
@@ -950,6 +960,7 @@ function ActiveRow({ item, first }: { item: InboxLiveActivityDto; first: boolean
 }
 
 function ActivityRow({ item, first }: { item: InboxActivityDto; first: boolean }) {
+  const { colors, styles } = useStyles();
   const [expanded, setExpanded] = useState(false);
   const expandable = item.detail !== null && item.detail.length > 0;
   return (
@@ -992,6 +1003,7 @@ function ActivityRow({ item, first }: { item: InboxActivityDto; first: boolean }
 }
 
 function SourceAvatar({ size = 40, url }: { size?: number; url?: string | null }) {
+  const { styles } = useStyles();
   return (
     <Image
       accessibilityIgnoresInvertColors
@@ -1014,6 +1026,7 @@ function ActionButton({
   disabled?: boolean;
   compact?: boolean;
 }) {
+  const { styles } = useStyles();
   return (
     <Pressable
       accessibilityRole="button"
@@ -1065,7 +1078,7 @@ function formatActivityTime(value: string): string {
   return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-const styles = StyleSheet.create({
+const useStyles = createThemedStyles((colors) => ({
   container: {
     flex: 1,
     backgroundColor: colors.paper,
@@ -1189,12 +1202,12 @@ const styles = StyleSheet.create({
   },
   projectSection: {
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#D8D6CE",
+    borderTopColor: colors.lineStrong,
   },
   projectGroup: {
     paddingBottom: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#D8D6CE",
+    borderBottomColor: colors.lineStrong,
   },
   projectRow: {
     minHeight: 64,
@@ -1232,7 +1245,7 @@ const styles = StyleSheet.create({
     flexShrink: 0,
     borderRadius: 11,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#0000001A",
+    borderColor: colors.shadowBorder,
     backgroundColor: colors.line,
   },
   projectThumbnailFallback: {
@@ -1308,9 +1321,9 @@ const styles = StyleSheet.create({
     gap: 7,
     paddingHorizontal: 16,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#D6D3CC",
+    borderColor: colors.lineStrong,
     borderRadius: 17,
-    backgroundColor: "#F2F1ED",
+    backgroundColor: colors.control,
   },
   projectReplyArea: {
     marginTop: 10,
@@ -1325,7 +1338,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accent,
   },
   unreadBadgeText: {
-    color: "#FFFFFF",
+    color: colors.onAccent,
     fontFamily: fonts.semibold,
     fontSize: 12,
     letterSpacing: tightTracking(12),
@@ -1356,7 +1369,7 @@ const styles = StyleSheet.create({
   sourceAvatar: {
     flexShrink: 0,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#0000001A",
+    borderColor: colors.shadowBorder,
     backgroundColor: colors.line,
   },
   itemCopy: {
@@ -1427,11 +1440,11 @@ const styles = StyleSheet.create({
   },
   secondaryAction: {
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#D6D3CC",
-    backgroundColor: "#F2F1ED",
+    borderColor: colors.lineStrong,
+    backgroundColor: colors.control,
   },
   actionLabel: {
-    color: "#FFFFFF",
+    color: colors.onAccent,
     fontFamily: fonts.medium,
     fontSize: 14,
     letterSpacing: tightTracking(14),
@@ -1584,14 +1597,14 @@ const styles = StyleSheet.create({
     transform: [{ scale: 0.96 }],
   },
   secondaryButtonPressed: {
-    backgroundColor: "#F0EFEC",
+    backgroundColor: colors.pressed,
     transform: [{ scale: 0.96 }],
   },
   iconButtonPressed: {
-    backgroundColor: "#F0EFEC",
+    backgroundColor: colors.pressed,
     transform: [{ scale: 0.96 }],
   },
   textButtonPressed: {
     opacity: 0.6,
   },
-});
+}));

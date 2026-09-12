@@ -18,9 +18,10 @@ import { linkifyBody, openBodyLink, openTopLevelDestination } from "../../src/li
 import { previewNotificationDetail } from "../../src/lib/inbox-preview";
 import { PREVIEW_MODE } from "../../src/lib/preview";
 import { SymbolView } from "../../src/lib/symbol-view";
-import { colors, fonts, tightTracking } from "../../src/lib/theme";
+import { createThemedStyles, fonts, tightTracking } from "../../src/lib/theme";
 
 export default function NotificationDetailScreen() {
+  const { colors, statusBarStyle, styles } = useStyles();
   const { data: session, isPending: sessionPending } = useSession();
   const router = useRouter();
   const params = useLocalSearchParams<{ id: string }>();
@@ -100,7 +101,7 @@ export default function NotificationDetailScreen() {
 
   return (
     <SafeAreaView edges={["top"]} style={styles.container}>
-      <StatusBar style="dark" />
+      <StatusBar style={statusBarStyle} />
       <View style={styles.header}>
         <Pressable
           accessibilityLabel="Back"
@@ -170,7 +171,12 @@ export default function NotificationDetailScreen() {
               }}
               style={({ pressed }) => [styles.openButton, pressed && styles.openButtonPressed]}
             >
-              <SymbolView name="arrow.up.right" size={14} tintColor="#FFFFFF" weight="semibold" />
+              <SymbolView
+                name="arrow.up.right"
+                size={14}
+                tintColor={colors.onAccent}
+                weight="semibold"
+              />
               <Text style={styles.openButtonText}>Open link</Text>
             </Pressable>
           ) : null}
@@ -185,6 +191,7 @@ export default function NotificationDetailScreen() {
  * WebView, no remote previews; links are revalidated again on tap.
  */
 function BodyText({ body }: { body: string }) {
+  const { styles } = useStyles();
   const segments = linkifyBody(body);
   // Character offsets make stable keys even when segment text repeats.
   let offset = 0;
@@ -215,6 +222,7 @@ function BodyText({ body }: { body: string }) {
 }
 
 function MetaRow({ label, value }: { label: string; value: string }) {
+  const { styles } = useStyles();
   return (
     <View style={styles.metaRow}>
       <Text style={styles.metaLabel}>{label}</Text>
@@ -253,7 +261,7 @@ function formatFullTime(value: string): string {
   });
 }
 
-const styles = StyleSheet.create({
+const useStyles = createThemedStyles((colors) => ({
   container: {
     flex: 1,
     backgroundColor: colors.paper,
@@ -275,7 +283,7 @@ const styles = StyleSheet.create({
     borderRadius: 22,
   },
   iconButtonPressed: {
-    backgroundColor: "#F0EFEC",
+    backgroundColor: colors.pressed,
     transform: [{ scale: 0.96 }],
   },
   loading: {
@@ -376,9 +384,9 @@ const styles = StyleSheet.create({
     transform: [{ scale: 0.98 }],
   },
   openButtonText: {
-    color: "#FFFFFF",
+    color: colors.onAccent,
     fontFamily: fonts.medium,
     fontSize: 14,
     letterSpacing: tightTracking(14),
   },
-});
+}));

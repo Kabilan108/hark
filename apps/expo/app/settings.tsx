@@ -28,9 +28,10 @@ import { DEVICE_ID_KEY, FCM_TOKEN_KEY } from "../src/lib/device";
 import { clearInteractionResponses } from "../src/lib/interactions";
 import { PREVIEW_MODE } from "../src/lib/preview";
 import { SymbolView } from "../src/lib/symbol-view";
-import { colors, fonts, tightTracking } from "../src/lib/theme";
+import { createThemedStyles, fonts, tightTracking } from "../src/lib/theme";
 
 export default function SettingsScreen() {
+  const { colors, statusBarStyle, styles } = useStyles();
   const { data: session, isPending } = useSession();
   const router = useRouter();
   const [notificationsAllowed, setNotificationsAllowed] = useState<boolean | null>(null);
@@ -142,7 +143,7 @@ export default function SettingsScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
-      <StatusBar style="dark" />
+      <StatusBar style={statusBarStyle} />
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.header}>
           <Pressable
@@ -220,6 +221,7 @@ function SettingsToggleRow({
   disabled: boolean;
   onValueChange: (value: boolean) => void;
 }) {
+  const { colors, styles } = useStyles();
   return (
     <View style={styles.row}>
       <View style={styles.rowIcon}>
@@ -249,6 +251,7 @@ function SettingsRow({
   value: string;
   onPress?: () => void;
 }) {
+  const { colors, styles } = useStyles();
   return (
     <Pressable
       accessibilityRole={onPress ? "button" : undefined}
@@ -268,7 +271,7 @@ function SettingsRow({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createThemedStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.paper },
   scroll: { paddingHorizontal: 24, paddingBottom: 48 },
   header: {
@@ -341,7 +344,7 @@ const styles = StyleSheet.create({
     letterSpacing: tightTracking(14),
   },
   pressed: {
-    backgroundColor: "#F0EFEC",
+    backgroundColor: colors.pressed,
     transform: [{ scale: 0.96 }],
   },
-});
+}));

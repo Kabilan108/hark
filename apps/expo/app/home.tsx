@@ -23,12 +23,13 @@ import { DEVICE_ID_KEY, FCM_TOKEN_KEY, registerCurrentDevice } from "../src/lib/
 import { clearInteractionResponses, flushInteractionResponses } from "../src/lib/interactions";
 import { PREVIEW_MODE } from "../src/lib/preview";
 import { SymbolView } from "../src/lib/symbol-view";
-import { colors, fonts, tightTracking } from "../src/lib/theme";
+import { createThemedStyles, fonts, type ThemeColors, tightTracking } from "../src/lib/theme";
 
 type PermissionState = "unknown" | "undetermined" | "granted" | "denied";
 type RegistrationState = "idle" | "working" | "registered" | "error";
 
 export default function HomeScreen() {
+  const { statusBarStyle, styles } = useStyles();
   const { data: session, isPending } = useSession();
   const router = useRouter();
 
@@ -212,7 +213,7 @@ export default function HomeScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
-      <StatusBar style="dark" />
+      <StatusBar style={statusBarStyle} />
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.header}>
           <View style={styles.brandGroup}>
@@ -291,6 +292,7 @@ export default function HomeScreen() {
 }
 
 function CompactStep({ title }: { title: string }) {
+  const { styles } = useStyles();
   return (
     <View style={styles.compactStep}>
       <View style={styles.compactCheck}>
@@ -318,6 +320,7 @@ function StepCard({
   onAction?: () => void | Promise<void>;
   disabled?: boolean;
 }) {
+  const { styles } = useStyles();
   return (
     <View style={styles.card}>
       <View style={styles.cardHeader}>
@@ -356,6 +359,7 @@ function ActivityLog({
   events: EventDto[] | null;
   onRefresh: () => Promise<void>;
 }) {
+  const { styles } = useStyles();
   return (
     <View style={styles.activitySection}>
       <View style={styles.activityHeader}>
@@ -376,6 +380,7 @@ function ActivityLog({
 }
 
 function ActivityLogRow({ activityEvent }: { activityEvent: EventDto }) {
+  const { colors, styles } = useStyles();
   const [expanded, setExpanded] = useState(false);
   const expandable = activityEvent.body.length > 0;
   return (
@@ -396,7 +401,7 @@ function ActivityLogRow({ activityEvent }: { activityEvent: EventDto }) {
           </View>
         )}
         <View style={styles.activityStatusBadge}>
-          <View style={[styles.activityDot, activityDotStyle(activityEvent.status)]} />
+          <View style={[styles.activityDot, activityDotStyle(activityEvent.status, colors)]} />
         </View>
       </View>
       <View style={styles.activityCopy}>
@@ -429,12 +434,12 @@ function ActivityLogRow({ activityEvent }: { activityEvent: EventDto }) {
   );
 }
 
-function activityDotStyle(status: string) {
+function activityDotStyle(status: string, colors: ThemeColors) {
   if (status === "accepted" || status === "delivered") return { backgroundColor: colors.accent };
   if (status === "withdrawn") return { backgroundColor: colors.soft };
   if (status === "failed") return { backgroundColor: colors.danger };
   if (status === "partial" || status === "withdraw_partial") {
-    return { backgroundColor: "#D48A16" };
+    return { backgroundColor: colors.warning };
   }
   return { backgroundColor: colors.line };
 }
@@ -451,7 +456,7 @@ function activityStatus(activityEvent: EventDto): string {
   return activityEvent.error ? `Failed · ${activityEvent.error}` : "Failed";
 }
 
-const styles = StyleSheet.create({
+const useStyles = createThemedStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.paper },
   scroll: { paddingHorizontal: 24, paddingBottom: 48, gap: 14 },
   header: {
@@ -508,7 +513,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     letterSpacing: tightTracking(13),
   },
-  stepBadgeTextDone: { color: "#FFFFFF" },
+  stepBadgeTextDone: { color: colors.onAccent },
   cardTitle: {
     color: colors.ink,
     fontFamily: fonts.semibold,
@@ -536,7 +541,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
   },
   cardButtonText: {
-    color: "#FFFFFF",
+    color: colors.onAccent,
     fontFamily: fonts.medium,
     fontSize: 15,
     letterSpacing: tightTracking(15),
@@ -575,7 +580,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accent,
   },
   compactCheckText: {
-    color: "#FFFFFF",
+    color: colors.onAccent,
     fontFamily: fonts.semibold,
     fontSize: 10,
   },
@@ -720,4 +725,4 @@ const styles = StyleSheet.create({
     fontSize: 13,
     letterSpacing: tightTracking(13),
   },
-});
+}));
