@@ -18,12 +18,14 @@ upstream npm release:
 nix run github:Kabilan108/hark/android-fork#harkctl -- --help
 nix profile add github:Kabilan108/hark/android-fork#harkctl
 harkctl auth status
-harkctl auth login --client-name "Sietch agents" --no-open
 ```
 
 Relay the authorization code and verification URL to the user, who can approve
-from their phone. Tokens belong in the CLI's protected local configuration,
-never in a skill or command argument. The default login includes notifications,
+from their phone. Fleet tokens are managed by agenix at `~/.config/hark/config.json`. For
+renewal, follow the private temporary config and host naming instructions in
+`~/dotfiles/agents/skills/notify/references/fleet.md`, then re-encrypt the matching host
+secret; do not overwrite the managed path with `auth login` or `auth logout`.
+Tokens never belong in a skill or command argument. The default login includes notifications,
 interactions, activities, and service creation. `services:write` is required to
 create services. Another machine needs its own authentication or provisioned
 service credential; installing the binary does not authenticate it.
@@ -98,9 +100,10 @@ Names are labels, not credentials. `harkctl services list` lists metadata withou
 webhook secrets. Creating a service prints a secret-bearing JSON result, so
 capture it directly into protected storage rather than tool output.
 
-For the personal notify workflow, the requested services are `alerts` and
-`moberg`. Read [the service setup reference](references/services.md) to provision
-or use them. Reuse existing services rather than creating one per job. Service
+For the personal notify workflow, general work uses the machine's CLI identity,
+Moberg work uses the shared `moberg` service, and an explicitly selected service
+takes precedence. Read [the service setup reference](references/services.md) to
+provision services and their agenix credentials across both fleet hosts. Reuse existing services rather than creating one per job. Service
 creation is not idempotent; after a partial failure, inspect existing services
 before retrying.
 
