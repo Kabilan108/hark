@@ -315,41 +315,118 @@ export const inboxRoute = new Hono<AuthedEnv>()
         updatedAt: project.updatedAt,
       })
       .from(project)
-      .where(eq(project.userId, userId));
+      .where(and(eq(project.userId, userId), isNull(project.archivedAt)));
     const namesById = new Map(knownProjects.map((row) => [row.id, row.name]));
 
-    const populated: InboxProjectSummaryDto[] = buckets.map((bucket) => ({
-      projectId: bucket.projectId,
-      name: bucket.projectId
-        ? (namesById.get(bucket.projectId) ?? INBOX_UNFILED_PROJECT_NAME)
-        : INBOX_UNFILED_PROJECT_NAME,
-      unreadCount: bucket.unread,
-      totalCount: bucket.total,
-      latestTitle: bucket.latestTitle,
-      latestPreview:
-        bucket.latestPreview === null
-          ? null
-          : boundPreview(bucket.latestPreview, bucket.latestLength ?? 0),
-      latestImageUrl: bucket.latestImageUrl,
-      latestAt: toIso(bucket.latestAt),
-    }));
+    interface HistoricalBucketRow {
+      projectId: string | null;
+      total: number;
+      stateCount: number;
+      latestTitle: string;
+      latestPreview: string;
+      latestAt: number;
+    }
+    const interactionHistory = db.all(sql`
+      select projectId, total, stateCount, title as latestTitle, prompt as latestPreview, activityAt as latestAt
+      from (
+        select
+          project_id as projectId, title, prompt,
+          coalesce(responded_at, canceled_at, created_at) as activityAt,
+          count(*) over (partition by project_id) as total,
+          sum(case when status = 'pending' and expires_at > ${Date.now()} then 1 else 0 end)
+            over (partition by project_id) as stateCount,
+          row_number() over (
+            partition by project_id
+            order by coalesce(responded_at, canceled_at, created_at) desc, id desc
+          ) as rn
+        from interaction
+        where user_id = ${userId}
+          and event_id is null
+      )
+      where rn = 1
+    `) as HistoricalBucketRow[];
+    const activityHistory = db.all(sql`
+      select projectId, total, stateCount, title as latestTitle, detail as latestPreview, updatedAt as latestAt
+      from (
+        select
+          project_id as projectId,
+          json_extract(props, '$.title') as title,
+          coalesce(json_extract(props, '$.detail'), json_extract(props, '$.status')) as detail,
+          updated_at as updatedAt,
+          count(*) over (partition by project_id) as total,
+          sum(case
+            when status in ('starting', 'active', 'partial') and expires_at > ${Date.now()}
+              then 1 else 0
+          end) over (partition by project_id) as stateCount,
+          row_number() over (partition by project_id order by updated_at desc, id desc) as rn
+        from live_activity
+        where user_id = ${userId}
+          and interaction_id is null
+      )
+      where rn = 1
+    `) as HistoricalBucketRow[];
 
-    const seen = new Set(populated.map((summary) => summary.projectId));
-    const empty: InboxProjectSummaryDto[] = knownProjects
-      .filter((row) => !seen.has(row.id))
-      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
-      .map((row) => ({
-        projectId: row.id,
-        name: row.name,
-        unreadCount: 0,
-        totalCount: 0,
-        latestTitle: null,
-        latestPreview: null,
-        latestImageUrl: null,
-        latestAt: null,
+    const populated: InboxProjectSummaryDto[] = buckets
+      .filter((bucket) => bucket.projectId === null || namesById.has(bucket.projectId))
+      .map((bucket) => ({
+        projectId: bucket.projectId,
+        name: bucket.projectId
+          ? (namesById.get(bucket.projectId) ?? INBOX_UNFILED_PROJECT_NAME)
+          : INBOX_UNFILED_PROJECT_NAME,
+        unreadCount: bucket.unread,
+        totalCount: bucket.total,
+        latestTitle: bucket.latestTitle,
+        latestPreview:
+          bucket.latestPreview === null
+            ? null
+            : boundPreview(bucket.latestPreview, bucket.latestLength ?? 0),
+        latestImageUrl: bucket.latestImageUrl,
+        latestAt: toIso(bucket.latestAt),
+        pendingInteractionCount: 0,
+        activeActivityCount: 0,
       }));
 
-    const projects = [...populated, ...empty];
+    const byProject = new Map(populated.map((summary) => [summary.projectId, summary]));
+    const mergeStandalone = (
+      row: HistoricalBucketRow,
+      field: "pendingInteractionCount" | "activeActivityCount",
+    ) => {
+      if (row.projectId !== null && !namesById.has(row.projectId)) return;
+      let summary = byProject.get(row.projectId);
+      if (!summary) {
+        summary = {
+          projectId: row.projectId,
+          name: row.projectId
+            ? (namesById.get(row.projectId) ?? INBOX_UNFILED_PROJECT_NAME)
+            : INBOX_UNFILED_PROJECT_NAME,
+          unreadCount: 0,
+          totalCount: 0,
+          latestTitle: null,
+          latestPreview: null,
+          latestImageUrl: null,
+          latestAt: null,
+          pendingInteractionCount: 0,
+          activeActivityCount: 0,
+        };
+        byProject.set(row.projectId, summary);
+      }
+      summary[field] = row.stateCount;
+      summary.totalCount += row.total;
+      const latestAt = new Date(row.latestAt).toISOString();
+      if (!summary.latestAt || latestAt > summary.latestAt) {
+        summary.latestTitle = row.latestTitle;
+        summary.latestPreview = boundPreview(row.latestPreview, row.latestPreview.length);
+        summary.latestImageUrl = null;
+        summary.latestAt = latestAt;
+      }
+    };
+    interactionHistory.forEach((row) => mergeStandalone(row, "pendingInteractionCount"));
+    activityHistory.forEach((row) => mergeStandalone(row, "activeActivityCount"));
+
+    // Empty projects can outlive deleted services or their last notification.
+    const projects = [...byProject.values()].sort((a, b) =>
+      (b.latestAt ?? "").localeCompare(a.latestAt ?? ""),
+    );
     const totalUnread = projects.reduce((sum, summary) => sum + summary.unreadCount, 0);
     return c.json<InboxProjectsDto>({ projects, totalUnread });
   })

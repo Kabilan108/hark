@@ -1,54 +1,52 @@
-# Hark service webhooks
+# Hark integration webhooks
 
-For fleet provisioning, first read
-`~/dotfiles/agents/skills/notify/references/fleet.md`. It is the authoritative
-agenix setup and token-renewal procedure shared by sietch and jacurutu. Creating
-a service includes encrypted credential distribution to both hosts, unless the
-user explicitly limits its scope. Leave requested skill edits uncommitted and
-ask the user to rebuild after validation; a local credential file is not enough.
+Use a service webhook for a non-agent script or external integration that needs
+separate ownership, revocation, or sender defaults. Examples include CI and
+another application. Agent notifications, including scheduled agents running as
+the user, use the current machine's `harkctl` token with `--project`; projects do
+not need webhooks.
 
-General work uses the local machine's CLI identity. Moberg work uses
-`~/.config/hark/services/moberg.curl`, unless the user explicitly selects another
-provisioned service.
+On the personal fleet, read
+`~/dotfiles/agents/skills/notify/references/fleet.md` before provisioning a
+service. It defines the private capture, encryption, host selection, validation,
+and activation procedure.
 
-## Sending through a service
+## Send through an integration
 
-Use curl's existing configuration mechanism. This puts the credential in neither
-shell arguments nor output; avoid verbose/trace mode.
+Use curl's config mechanism so the credential stays out of shell arguments and
+output. Avoid verbose and trace mode.
 
 ```sh
-curl --config "$HOME/.config/hark/services/moberg.curl" \
+curl --config "$HOME/.config/hark/integrations/release-ci.curl" \
   --silent --show-error --fail \
   --header 'Content-Type: application/json' \
   --header 'Idempotency-Key: unique-job-complete' \
-  --data-binary '{"body":"Checks passed. Ready for review.","project":"moberg"}'
+  --data-binary '{"body":"Checks passed. Ready for review.","project":"Hark"}'
 ```
 
-The service and project are independent: the credential selects the sender,
-while `project` groups ordinary messages in the app. Service defaults provide
-the title; include a title or deliverable URL in JSON to override them. Encode
-dynamic content with a JSON serializer, not string concatenation.
+The credential selects the sender. `project` controls inbox grouping. Service
+defaults provide the title, image, and link; request JSON can override them.
+Encode dynamic content with a JSON serializer instead of string concatenation.
 
-For service-attributed interactions, add `response` to the webhook payload:
+For an interaction, add `response` to the webhook payload:
 
 ```json
-{"body":"Deploy reviewed commit abc123 to staging?","response":{"type":"approval","expiresInSeconds":900}}
+{"body":"Deploy reviewed commit abc123 to staging?","project":"Hark","response":{"type":"approval","expiresInSeconds":900}}
 ```
 
-Response types are `approval`, `yes_no`, or `text`. Retain the returned `eventId`.
-Read the result with GET `<webhookUrl>/events/<eventId>`; a service interaction
-returns an event ID, whereas direct CLI asks return an interaction ID. Use a
-structured HTTP client to append this path to the privately loaded URL, and
-report only the response JSON, never the credential. Alternatively configure
-an authenticated response callback for an existing automation receiver. The
-backend retries callbacks; receivers should tolerate duplicate delivery.
+Response types are `approval`, `yes_no`, and `text`. Retain the returned
+`eventId`. Read the result with GET `<webhookUrl>/events/<eventId>`. A service
+interaction returns an event ID, while a direct CLI question returns an
+interaction ID. Use a structured HTTP client to append the path to the privately
+loaded URL, and report only response JSON. An authenticated callback is another
+option for an existing automation receiver. The backend retries callbacks, so
+receivers must tolerate duplicates.
 
 Service Live Updates use POST `<webhookUrl>/live-activities`, PATCH
 `<webhookUrl>/live-activities/<id-or-key>`, and POST
-`<webhookUrl>/live-activities/<id-or-key>/end`. These accept the corresponding
-activity JSON fields. Use the CLI for direct agent asks/activities when service
-attribution is unnecessary; that provides the existing managed-wait commands.
+`<webhookUrl>/live-activities/<id-or-key>/end`. They accept the corresponding
+activity JSON fields. Set the project when starting the activity.
 
 Successful FCM acceptance is not proof of phone display. Verify configuration
-without sending unsolicited test messages; use a user-requested smoke test for
-end-to-end display and response checks.
+without sending unsolicited test messages. Use a user-requested smoke test for
+display and response checks.

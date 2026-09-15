@@ -631,14 +631,31 @@ describe("interactions", () => {
 
   it("is idempotent per requester token and rejects changed payloads", async () => {
     sent.length = 0;
-    const payload = { title: "Release", prompt: "Ship?", kind: "approval" };
+    const payload = {
+      title: "Release",
+      prompt: "Ship?",
+      kind: "approval",
+      project: "Archived replay interaction",
+    };
     const first = await createInteraction(payload, "release-1");
-    const firstBody = (await first.json()) as { interaction: { id: string } };
+    const firstBody = (await first.json()) as {
+      interaction: { id: string; projectId: string };
+    };
+    const { eq } = await import("drizzle-orm");
+    await db
+      .update(schema.project)
+      .set({ archivedAt: new Date() })
+      .where(eq(schema.project.id, firstBody.interaction.projectId));
     const replay = await createInteraction(payload, "release-1");
     expect(await replay.json()).toMatchObject({
       idempotent: true,
       interaction: { id: firstBody.interaction.id },
     });
+    const [project] = await db
+      .select()
+      .from(schema.project)
+      .where(eq(schema.project.id, firstBody.interaction.projectId));
+    expect(project?.archivedAt).not.toBeNull();
     expect(sent).toHaveLength(2);
     const conflict = await createInteraction({ ...payload, prompt: "Do not ship?" }, "release-1");
     expect(conflict.status).toBe(409);

@@ -116,6 +116,7 @@ export const project = sqliteTable(
       .references(() => user.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     normalizedName: text("normalized_name").notNull(),
+    archivedAt: integer("archived_at", { mode: "timestamp_ms" }),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
     updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
   },
@@ -297,6 +298,7 @@ export const interaction = sqliteTable(
       onDelete: "cascade",
     }),
     eventId: text("event_id").references(() => event.id, { onDelete: "cascade" }),
+    projectId: text("project_id").references(() => project.id, { onDelete: "set null" }),
     title: text("title").notNull(),
     prompt: text("prompt").notNull(),
     kind: text("kind").notNull(),
@@ -349,6 +351,7 @@ export const interaction = sqliteTable(
     index("interaction_callback_due_idx").on(table.callbackStatus, table.callbackNextAttemptAt),
     index("interaction_user_status_expiry_idx").on(table.userId, table.status, table.expiresAt),
     index("interaction_user_responded_at_idx").on(table.userId, table.respondedAt),
+    index("interaction_project_created_at_idx").on(table.projectId, table.createdAt),
   ],
 );
 
@@ -368,6 +371,7 @@ export const liveActivity = sqliteTable(
     interactionId: text("interaction_id")
       .unique()
       .references(() => interaction.id, { onDelete: "cascade" }),
+    projectId: text("project_id").references(() => project.id, { onDelete: "set null" }),
     key: text("key"),
     schemaVersion: integer("schema_version").notNull(),
     props: text("props", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
@@ -409,6 +413,7 @@ export const liveActivity = sqliteTable(
     index("live_activity_user_status_updated_idx").on(table.userId, table.status, table.updatedAt),
     index("live_activity_token_created_idx").on(table.requesterTokenId, table.createdAt),
     index("live_activity_service_created_idx").on(table.requesterServiceId, table.createdAt),
+    index("live_activity_project_updated_idx").on(table.projectId, table.updatedAt),
   ],
 );
 

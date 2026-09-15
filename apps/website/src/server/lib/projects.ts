@@ -10,15 +10,28 @@ export interface ProjectResolution {
   message?: string;
 }
 
-const CAP_MESSAGE = `Project limit reached (${MAX_PROJECTS_PER_ACCOUNT} per account); the notification was stored without a project.`;
+const CAP_MESSAGE = `Project limit reached (${MAX_PROJECTS_PER_ACCOUNT} per account); the item was stored without a project.`;
 
-async function findProjectId(userId: string, normalizedName: string): Promise<string | null> {
+async function findProject(
+  userId: string,
+  normalizedName: string,
+): Promise<{ id: string; archivedAt: Date | null } | null> {
   const [row] = await db
-    .select({ id: project.id })
+    .select({ id: project.id, archivedAt: project.archivedAt })
     .from(project)
     .where(and(eq(project.userId, userId), eq(project.normalizedName, normalizedName)))
     .limit(1);
-  return row?.id ?? null;
+  return row ?? null;
+}
+
+async function restoreProject(row: { id: string; archivedAt: Date | null }): Promise<string> {
+  if (row.archivedAt) {
+    await db
+      .update(project)
+      .set({ archivedAt: null, updatedAt: new Date() })
+      .where(eq(project.id, row.id));
+  }
+  return row.id;
 }
 
 /**
@@ -36,8 +49,8 @@ export async function resolveProjectForDelivery(
   const name = rawName.normalize("NFC");
   const normalizedName = normalizeProjectName(rawName);
 
-  const existing = await findProjectId(userId, normalizedName);
-  if (existing) return { projectId: existing };
+  const existing = await findProject(userId, normalizedName);
+  if (existing) return { projectId: await restoreProject(existing) };
 
   const now = Date.now();
   const id = newId("prj");
@@ -58,8 +71,8 @@ export async function resolveProjectForDelivery(
     inserted = result.changes;
   } catch (error) {
     // A concurrent request created the same name; adopt that row.
-    const raced = await findProjectId(userId, normalizedName);
-    if (raced) return { projectId: raced };
+    const raced = await findProject(userId, normalizedName);
+    if (raced) return { projectId: await restoreProject(raced) };
     throw error;
   }
   if (inserted > 0) return { projectId: id };
@@ -67,7 +80,7 @@ export async function resolveProjectForDelivery(
   // The cap gate stopped the insert. A concurrent delivery may have created
   // this very name while filling the final slot, so prefer adopting it over
   // degrading the delivery to Unfiled.
-  const raced = await findProjectId(userId, normalizedName);
-  if (raced) return { projectId: raced };
+  const raced = await findProject(userId, normalizedName);
+  if (raced) return { projectId: await restoreProject(raced) };
   return { projectId: null, message: CAP_MESSAGE };
 }

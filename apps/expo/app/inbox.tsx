@@ -162,13 +162,17 @@ export default function InboxScreen() {
     void refreshAll()
       .catch(() => setLoadError(true))
       .finally(() => setLoading(false));
-    const timer = setInterval(() => void refreshAll().catch(() => {}), 15_000);
+    const timer = setInterval(() => void refreshAll().catch(() => setLoadError(true)), 15_000);
     const appStateSubscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") void refreshAll().catch(() => {});
+      if (state === "active") void refreshAll().catch(() => setLoadError(true));
+    });
+    const notificationSubscription = Notifications.addNotificationReceivedListener(() => {
+      void refreshAll().catch(() => setLoadError(true));
     });
     return () => {
       clearInterval(timer);
       appStateSubscription.remove();
+      notificationSubscription.remove();
     };
   }, [deviceId, refreshAll, session]);
 
@@ -190,7 +194,7 @@ export default function InboxScreen() {
   useFocusEffect(
     useCallback(() => {
       if (focusRefreshPolicy.onFocus(focusReadyRef.current)) {
-        void refreshAllRef.current().catch(() => {});
+        void refreshAllRef.current().catch(() => setLoadError(true));
       }
       return () => focusRefreshPolicy.onBlur();
     }, [focusRefreshPolicy]),
@@ -250,7 +254,11 @@ export default function InboxScreen() {
   };
 
   const activityPageCount = Math.max(1, Math.ceil(activityTotal / ACTIVITY_PAGE_SIZE));
-  const projectGroups = buildProjectGroups(projects, pending, active);
+  const projectNames = new Map(
+    projects
+      .filter((project) => project.projectId !== null)
+      .map((project) => [project.projectId, project.name]),
+  );
 
   if (!sessionPending && !session && !simulatorPreview) return <Redirect href="/" />;
   if (deviceId === "") return <Redirect href="/home" />;
@@ -292,45 +300,23 @@ export default function InboxScreen() {
             </Pressable>
           </View>
 
-          {projectGroups.length > 0 ? (
-            <View style={styles.projectSection}>
-              {projectGroups.map((group) => (
-                <ProjectGroup
-                  active={group.active}
-                  item={group.project}
-                  key={group.project.projectId ?? "unfiled"}
-                  onCancelReply={() => {
-                    setReplyingTo(null);
-                    setReply("");
-                  }}
-                  onOpen={() =>
-                    router.push({
-                      pathname: "/project/[project]",
-                      params: {
-                        project: group.project.projectId ?? "unfiled",
-                        name: group.project.name,
-                      },
-                    })
-                  }
-                  onReplyChange={setReply}
-                  onResolve={(interaction, action, response) =>
-                    void resolveItem(interaction, action, response)
-                  }
-                  onStartReply={(id) => setReplyingTo(id)}
-                  pending={group.pending}
-                  reply={reply}
-                  replyingTo={replyingTo}
-                  respondingTo={respondingTo}
-                />
-              ))}
-            </View>
-          ) : (
-            <>
+          {loadError ? (
+            <Text style={styles.refreshError}>Couldn’t refresh the inbox. Pull to retry.</Text>
+          ) : null}
+
+          {pending.length > 0 ? (
+            <View style={styles.prominentSection}>
+              <Text style={styles.sectionHeading}>Needs your response</Text>
               {pending.map((item, index) => (
                 <PendingRow
                   item={item}
                   key={item.id}
                   first={index === 0}
+                  projectName={
+                    item.projectId
+                      ? (projectNames.get(item.projectId) ?? "Archived project")
+                      : "Other"
+                  }
                   replying={replyingTo === item.id}
                   reply={reply}
                   onReplyChange={setReply}
@@ -343,11 +329,48 @@ export default function InboxScreen() {
                   responding={respondingTo === item.id}
                 />
               ))}
+            </View>
+          ) : null}
+
+          {active.length > 0 ? (
+            <View style={styles.prominentSection}>
+              <Text style={styles.sectionHeading}>Live Updates</Text>
               {active.map((item, index) => (
-                <ActiveRow item={item} key={item.id} first={index === 0} />
+                <ActiveRow
+                  item={item}
+                  key={item.id}
+                  first={index === 0}
+                  projectName={
+                    item.projectId
+                      ? (projectNames.get(item.projectId) ?? "Archived project")
+                      : "Other"
+                  }
+                />
               ))}
-            </>
-          )}
+            </View>
+          ) : null}
+
+          {projects.length > 0 ? (
+            <View style={styles.projectSection}>
+              <Text style={styles.sectionHeading}>Projects</Text>
+              {projects.map((project) => (
+                <ProjectRow
+                  item={project}
+                  key={project.projectId ?? "unfiled"}
+                  onPress={() =>
+                    router.push({
+                      pathname: "/project/[project]",
+                      params: {
+                        project: project.projectId ?? "unfiled",
+                        name: project.name,
+                      },
+                    })
+                  }
+                  showPreview
+                />
+              ))}
+            </View>
+          ) : null}
 
           <Pressable
             accessibilityRole="button"
@@ -399,67 +422,6 @@ export default function InboxScreen() {
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
-}
-
-interface ProjectGroupData {
-  project: InboxProjectSummaryDto;
-  pending: InboxInteractionDto[];
-  active: InboxLiveActivityDto[];
-}
-
-function buildProjectGroups(
-  projects: InboxProjectSummaryDto[],
-  pending: InboxInteractionDto[],
-  active: InboxLiveActivityDto[],
-): ProjectGroupData[] {
-  if (projects.length === 0) return [];
-
-  const projectIds = new Set(projects.map((project) => project.projectId));
-  const projectByName = new Map(projects.map((project) => [project.name.toLowerCase(), project]));
-  const keyFor = (item: { projectId?: string | null; sourceName: string }): string | null => {
-    if (item.projectId !== undefined && projectIds.has(item.projectId)) return item.projectId;
-    const named = projectByName.get(item.sourceName.toLowerCase());
-    return named?.projectId ?? null;
-  };
-
-  const pendingByProject = new Map<string | null, InboxInteractionDto[]>();
-  const activeByProject = new Map<string | null, InboxLiveActivityDto[]>();
-  for (const item of pending) {
-    const key = keyFor(item);
-    pendingByProject.set(key, [...(pendingByProject.get(key) ?? []), item]);
-  }
-  for (const item of active) {
-    const key = keyFor(item);
-    activeByProject.set(key, [...(activeByProject.get(key) ?? []), item]);
-  }
-
-  const groups = projects.map((project) => ({
-    project,
-    pending: pendingByProject.get(project.projectId) ?? [],
-    active: activeByProject.get(project.projectId) ?? [],
-  }));
-
-  if (!projectIds.has(null) && (pendingByProject.has(null) || activeByProject.has(null))) {
-    const unfiledPending = pendingByProject.get(null) ?? [];
-    const unfiledActive = activeByProject.get(null) ?? [];
-    groups.push({
-      project: {
-        projectId: null,
-        name: "Other",
-        unreadCount: 0,
-        totalCount: 0,
-        latestTitle: null,
-        latestPreview: null,
-        latestImageUrl:
-          unfiledPending[0]?.sourceImageUrl ?? unfiledActive[0]?.sourceImageUrl ?? null,
-        latestAt: null,
-      },
-      pending: unfiledPending,
-      active: unfiledActive,
-    });
-  }
-
-  return groups;
 }
 
 function ActivityPicker({
@@ -555,7 +517,7 @@ function Pagination({
   );
 }
 
-function PendingRow({
+export function PendingRow({
   item,
   first,
   replying,
@@ -565,6 +527,7 @@ function PendingRow({
   onCancelReply,
   onResolve,
   responding,
+  projectName,
 }: {
   item: InboxInteractionDto;
   first: boolean;
@@ -575,6 +538,7 @@ function PendingRow({
   onCancelReply: () => void;
   onResolve: (action: "approve" | "deny" | "yes" | "no" | "reply", response?: string) => void;
   responding: boolean;
+  projectName?: string;
 }) {
   const { colors, styles } = useStyles();
   return (
@@ -586,6 +550,7 @@ function PendingRow({
             <Text style={styles.itemSource}>{item.sourceName}</Text>
             <Text style={styles.itemTime}>{relativeTime(item.createdAt)}</Text>
           </View>
+          {projectName ? <Text style={styles.projectAttribution}>{projectName}</Text> : null}
           <Text style={styles.itemTitle}>{item.title}</Text>
           <Text style={styles.itemPrompt}>{item.prompt}</Text>
           <View style={styles.expirationRow}>
@@ -672,203 +637,6 @@ function PendingRow({
   );
 }
 
-function ProjectGroup({
-  item,
-  pending,
-  active,
-  reply,
-  replyingTo,
-  respondingTo,
-  onOpen,
-  onReplyChange,
-  onStartReply,
-  onCancelReply,
-  onResolve,
-}: {
-  item: InboxProjectSummaryDto;
-  pending: InboxInteractionDto[];
-  active: InboxLiveActivityDto[];
-  reply: string;
-  replyingTo: string | null;
-  respondingTo: string | null;
-  onOpen: () => void;
-  onReplyChange: (value: string) => void;
-  onStartReply: (id: string) => void;
-  onCancelReply: () => void;
-  onResolve: (
-    item: InboxInteractionDto,
-    action: "approve" | "deny" | "yes" | "no" | "reply",
-    response?: string,
-  ) => void;
-}) {
-  const { styles } = useStyles();
-  const hasLiveContent = pending.length > 0 || active.length > 0;
-  return (
-    <View style={styles.projectGroup}>
-      <ProjectRow item={item} onPress={onOpen} showPreview={!hasLiveContent} />
-      {pending.map((interaction) => (
-        <ProjectInteraction
-          item={interaction}
-          key={interaction.id}
-          onCancelReply={onCancelReply}
-          onReplyChange={onReplyChange}
-          onResolve={(action, response) => onResolve(interaction, action, response)}
-          onStartReply={() => onStartReply(interaction.id)}
-          reply={reply}
-          replying={replyingTo === interaction.id}
-          responding={respondingTo === interaction.id}
-        />
-      ))}
-      {active.map((activity) => (
-        <ProjectActivity item={activity} key={activity.id} />
-      ))}
-    </View>
-  );
-}
-
-function ProjectInteraction({
-  item,
-  replying,
-  reply,
-  responding,
-  onReplyChange,
-  onStartReply,
-  onCancelReply,
-  onResolve,
-}: {
-  item: InboxInteractionDto;
-  replying: boolean;
-  reply: string;
-  responding: boolean;
-  onReplyChange: (value: string) => void;
-  onStartReply: () => void;
-  onCancelReply: () => void;
-  onResolve: (action: "approve" | "deny" | "yes" | "no" | "reply", response?: string) => void;
-}) {
-  const { colors, styles } = useStyles();
-  const actionButtons =
-    item.kind === "approval" ? (
-      <View style={styles.projectActionButtons}>
-        <ActionButton
-          compact
-          disabled={responding}
-          label={item.secondaryLabel ?? "Deny"}
-          onPress={() => onResolve("deny")}
-          secondary
-        />
-        <ActionButton
-          compact
-          disabled={responding}
-          label={responding ? "Sending…" : (item.primaryLabel ?? "Approve")}
-          onPress={() => onResolve("approve")}
-        />
-      </View>
-    ) : item.kind === "yes_no" ? (
-      <View style={styles.projectActionButtons}>
-        <ActionButton
-          compact
-          disabled={responding}
-          label={item.secondaryLabel ?? "No"}
-          onPress={() => onResolve("no")}
-          secondary
-        />
-        <ActionButton
-          compact
-          disabled={responding}
-          label={responding ? "Sending…" : (item.primaryLabel ?? "Yes")}
-          onPress={() => onResolve("yes")}
-        />
-      </View>
-    ) : (
-      <Pressable
-        accessibilityRole="button"
-        disabled={responding}
-        hitSlop={{ top: 5, bottom: 5 }}
-        onPress={onStartReply}
-        style={({ pressed }) => [
-          styles.compactReplyButton,
-          pressed && styles.secondaryButtonPressed,
-        ]}
-      >
-        <SymbolView name="arrow.turn.down.left" size={14} tintColor={colors.accent} />
-        <Text style={styles.replyButtonText}>Reply</Text>
-      </Pressable>
-    );
-
-  return (
-    <View style={styles.projectChild}>
-      <Text style={styles.projectActionTitle}>{item.title}</Text>
-      <Text style={styles.projectActionPrompt}>{item.prompt}</Text>
-      {replying && item.kind === "reply" ? (
-        <View style={styles.projectReplyArea}>
-          <TextInput
-            autoFocus
-            multiline
-            onChangeText={onReplyChange}
-            placeholder="Write a response"
-            placeholderTextColor={colors.soft}
-            style={styles.replyInput}
-            value={reply}
-          />
-          <View style={styles.replyFooter}>
-            <Pressable
-              accessibilityRole="button"
-              hitSlop={8}
-              onPress={onCancelReply}
-              style={({ pressed }) => pressed && styles.textButtonPressed}
-            >
-              <Text style={styles.cancelText}>Cancel</Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              disabled={!reply.trim() || responding}
-              onPress={() => onResolve("reply", reply)}
-              style={({ pressed }) => [
-                styles.sendButton,
-                (!reply.trim() || responding) && styles.sendButtonDisabled,
-                pressed && reply.trim() && !responding && styles.buttonPressed,
-              ]}
-            >
-              <SymbolView name="arrow.up" size={15} tintColor={colors.onAccent} weight="semibold" />
-            </Pressable>
-          </View>
-        </View>
-      ) : (
-        <View style={styles.projectActionFooter}>
-          <View style={styles.projectActionMeta}>
-            <SymbolView name="clock" size={11} tintColor={colors.muted} />
-            <Text numberOfLines={1} style={styles.projectActionMetaText}>
-              {timeRemaining(item.expiresAt)} · {item.sourceName}
-            </Text>
-          </View>
-          {actionButtons}
-        </View>
-      )}
-    </View>
-  );
-}
-
-function ProjectActivity({ item }: { item: InboxLiveActivityDto }) {
-  const { styles } = useStyles();
-  const progress = item.props.progress;
-  return (
-    <View style={styles.projectChild}>
-      <View style={styles.rowTopLine}>
-        <Text style={styles.projectActionTitle}>{item.props.title}</Text>
-        {progress !== undefined ? (
-          <Text style={styles.activePercent}>{Math.round(progress * 100)}%</Text>
-        ) : null}
-      </View>
-      <Text style={styles.projectActionPrompt}>{item.props.detail ?? item.props.status}</Text>
-      {progress !== undefined ? (
-        <View style={styles.progressTrack}>
-          <View style={[styles.progressFill, { width: `${Math.round(progress * 100)}%` }]} />
-        </View>
-      ) : null}
-    </View>
-  );
-}
-
 function ProjectRow({
   item,
   onPress,
@@ -879,10 +647,17 @@ function ProjectRow({
   showPreview: boolean;
 }) {
   const { colors, styles } = useStyles();
+  const pendingCount = item.pendingInteractionCount ?? 0;
+  const activeCount = item.activeActivityCount ?? 0;
+  const summaryParts = [
+    `${item.totalCount} ${item.totalCount === 1 ? "item" : "items"}`,
+    ...(pendingCount > 0 ? [`${pendingCount} awaiting response`] : []),
+    ...(activeCount > 0 ? [`${activeCount} live`] : []),
+  ];
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${item.name}, ${item.unreadCount} unread`}
+      accessibilityLabel={`${item.name}, ${summaryParts.join(", ")}, ${item.unreadCount} unread`}
       onPress={onPress}
       style={({ pressed }) => [styles.projectRow, pressed && styles.projectRowPressed]}
     >
@@ -897,9 +672,14 @@ function ProjectRow({
           ) : null}
         </View>
         {showPreview ? (
-          <Text numberOfLines={1} style={styles.projectPreview}>
-            {item.latestPreview ?? "No notifications yet"}
-          </Text>
+          <>
+            <Text numberOfLines={1} style={styles.projectPreview}>
+              {item.latestPreview ?? "No messages yet"}
+            </Text>
+            <Text numberOfLines={1} style={styles.projectMeta}>
+              {summaryParts.join(" · ")}
+            </Text>
+          </>
         ) : null}
       </View>
       {item.unreadCount > 0 ? (
@@ -932,7 +712,15 @@ function ProjectThumbnail({ name, url }: { name: string; url?: string | null }) 
   );
 }
 
-function ActiveRow({ item, first }: { item: InboxLiveActivityDto; first: boolean }) {
+export function ActiveRow({
+  item,
+  first,
+  projectName,
+}: {
+  item: InboxLiveActivityDto;
+  first: boolean;
+  projectName?: string;
+}) {
   const { styles } = useStyles();
   const progress = item.props.progress;
   return (
@@ -946,6 +734,7 @@ function ActiveRow({ item, first }: { item: InboxLiveActivityDto; first: boolean
           ) : null}
         </View>
         <Text style={styles.itemTitle}>{item.props.title}</Text>
+        {projectName ? <Text style={styles.projectAttribution}>{projectName}</Text> : null}
         <Text style={styles.itemPrompt} numberOfLines={1}>
           {item.props.detail ?? item.props.status}
         </Text>
@@ -959,7 +748,7 @@ function ActiveRow({ item, first }: { item: InboxLiveActivityDto; first: boolean
   );
 }
 
-function ActivityRow({ item, first }: { item: InboxActivityDto; first: boolean }) {
+export function ActivityRow({ item, first }: { item: InboxActivityDto; first: boolean }) {
   const { colors, styles } = useStyles();
   const [expanded, setExpanded] = useState(false);
   const expandable = item.detail !== null && item.detail.length > 0;
@@ -1018,24 +807,20 @@ function ActionButton({
   onPress,
   secondary,
   disabled,
-  compact,
 }: {
   label: string;
   onPress: () => void;
   secondary?: boolean;
   disabled?: boolean;
-  compact?: boolean;
 }) {
   const { styles } = useStyles();
   return (
     <Pressable
       accessibilityRole="button"
       disabled={disabled}
-      hitSlop={compact ? { top: 5, bottom: 5 } : undefined}
       onPress={onPress}
       style={({ pressed }) => [
         styles.actionButton,
-        compact && styles.compactActionButton,
         secondary && styles.secondaryAction,
         disabled && styles.sendButtonDisabled,
         pressed && (secondary ? styles.secondaryButtonPressed : styles.buttonPressed),
@@ -1164,6 +949,20 @@ const useStyles = createThemedStyles((colors) => ({
     fontSize: 13,
     letterSpacing: tightTracking(13),
   },
+  refreshError: {
+    marginBottom: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.line,
+    borderRadius: 12,
+    backgroundColor: colors.surface,
+    color: colors.muted,
+    fontFamily: fonts.regular,
+    fontSize: 12,
+    lineHeight: 17,
+    letterSpacing: tightTracking(12),
+  },
   activeRow: {
     flexDirection: "row",
     gap: 12,
@@ -1201,13 +1000,21 @@ const useStyles = createThemedStyles((colors) => ({
     borderTopColor: colors.line,
   },
   projectSection: {
+    marginTop: 18,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.lineStrong,
   },
-  projectGroup: {
-    paddingBottom: 16,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.lineStrong,
+  prominentSection: {
+    marginBottom: 18,
+  },
+  sectionHeading: {
+    paddingTop: 10,
+    paddingBottom: 5,
+    color: colors.soft,
+    fontFamily: fonts.semibold,
+    fontSize: 11,
+    letterSpacing: 0.7,
+    textTransform: "uppercase",
   },
   projectRow: {
     minHeight: 64,
@@ -1239,6 +1046,14 @@ const useStyles = createThemedStyles((colors) => ({
     lineHeight: 18,
     letterSpacing: tightTracking(13),
   },
+  projectMeta: {
+    marginTop: 2,
+    color: colors.soft,
+    fontFamily: fonts.regular,
+    fontSize: 11,
+    lineHeight: 15,
+    letterSpacing: tightTracking(11),
+  },
   projectThumbnail: {
     width: 40,
     height: 40,
@@ -1258,75 +1073,6 @@ const useStyles = createThemedStyles((colors) => ({
     fontFamily: fonts.semibold,
     fontSize: 15,
     letterSpacing: tightTracking(15),
-  },
-  projectChild: {
-    paddingTop: 5,
-    paddingBottom: 7,
-  },
-  projectActionTitle: {
-    flex: 1,
-    color: colors.ink,
-    fontFamily: fonts.semibold,
-    fontSize: 14,
-    lineHeight: 19,
-    letterSpacing: tightTracking(14),
-  },
-  projectActionPrompt: {
-    marginTop: 3,
-    color: colors.muted,
-    fontFamily: fonts.regular,
-    fontSize: 13,
-    lineHeight: 18,
-    letterSpacing: tightTracking(13),
-  },
-  projectActionFooter: {
-    minHeight: 44,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 10,
-    marginTop: 8,
-  },
-  projectActionMeta: {
-    minWidth: 0,
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-  },
-  projectActionMetaText: {
-    flex: 1,
-    color: colors.muted,
-    fontFamily: fonts.regular,
-    fontSize: 11,
-    letterSpacing: tightTracking(11),
-  },
-  projectActionButtons: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  compactActionButton: {
-    minWidth: 72,
-    minHeight: 34,
-    flex: 0,
-    paddingHorizontal: 14,
-    borderRadius: 17,
-  },
-  compactReplyButton: {
-    minHeight: 34,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 7,
-    paddingHorizontal: 16,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.lineStrong,
-    borderRadius: 17,
-    backgroundColor: colors.control,
-  },
-  projectReplyArea: {
-    marginTop: 10,
   },
   unreadBadge: {
     minWidth: 22,
@@ -1403,6 +1149,14 @@ const useStyles = createThemedStyles((colors) => ({
     fontSize: 15,
     lineHeight: 20,
     letterSpacing: tightTracking(15),
+  },
+  projectAttribution: {
+    marginTop: 2,
+    color: colors.accent,
+    fontFamily: fonts.medium,
+    fontSize: 11,
+    lineHeight: 15,
+    letterSpacing: tightTracking(11),
   },
   itemPrompt: {
     marginTop: 4,

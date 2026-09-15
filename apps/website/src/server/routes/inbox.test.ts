@@ -63,6 +63,14 @@ beforeAll(async () => {
     scopes: ["notifications:send"],
     createdAt: now,
   });
+  await db.insert(schema.project).values({
+    id: "prj_inbox",
+    userId: "user_inbox",
+    name: "Inbox project",
+    normalizedName: "inbox project",
+    createdAt: now,
+    updatedAt: now,
+  });
   await db.insert(schema.service).values([
     {
       id: "svc_inbox",
@@ -105,12 +113,14 @@ beforeAll(async () => {
     {
       ...interactionBase,
       id: "int_expired",
+      projectId: "prj_inbox",
       status: "pending",
       expiresAt: new Date(now.getTime() - 1_000),
     },
     {
       ...interactionBase,
       id: "int_answered",
+      projectId: "prj_inbox",
       status: "approved",
       response: "approve",
       respondedAt: new Date(now.getTime() - 500),
@@ -142,6 +152,7 @@ beforeAll(async () => {
     id: "ntf_inbox",
     userId: "user_inbox",
     requesterTokenId: "tok_inbox",
+    projectId: "prj_inbox",
     title: "Build passed",
     body: "Integration tests passed",
     acceptedCount: 1,
@@ -151,6 +162,7 @@ beforeAll(async () => {
     id: "act_inbox",
     userId: "user_inbox",
     requesterTokenId: "tok_inbox",
+    projectId: "prj_inbox",
     schemaVersion: 1,
     props: {
       schemaVersion: 1,
@@ -238,7 +250,7 @@ describe("mobile inbox", () => {
       pageSize: number;
       total: number;
     };
-    expect(firstBody).toMatchObject({ page: 0, pageSize: 20, total: 25 });
+    expect(firstBody).toMatchObject({ page: 0, pageSize: 20, total: 26 });
     expect(firstBody.items).toHaveLength(20);
     expect(firstBody.items.map((item) => item.kind)).toContain("response");
     expect(firstBody.items.map((item) => item.kind)).toContain("live_activity");
@@ -246,8 +258,8 @@ describe("mobile inbox", () => {
 
     const second = await app.request("/api/activity-feed?page=1");
     const secondBody = (await second.json()) as { items: unknown[]; total: number };
-    expect(secondBody.items).toHaveLength(5);
-    expect(secondBody.total).toBe(25);
+    expect(secondBody.items).toHaveLength(6);
+    expect(secondBody.total).toBe(26);
 
     const notifications = await app.request("/api/activity-feed?filter=notification");
     const notificationBody = (await notifications.json()) as {
@@ -257,5 +269,24 @@ describe("mobile inbox", () => {
     expect(notificationBody.total).toBe(23);
     expect(notificationBody.items.every((item) => item.kind === "notification")).toBe(true);
     expect((await app.request("/api/activity-feed?filter=unknown")).status).toBe(400);
+
+    const projectFeed = await app.request("/api/activity-feed?project=prj_inbox");
+    expect(projectFeed.status).toBe(200);
+    const projectBody = (await projectFeed.json()) as {
+      items: Array<{ id: string; projectId: string | null }>;
+      total: number;
+    };
+    expect(projectBody.total).toBe(4);
+    expect(projectBody.items.map((item) => item.id).sort()).toEqual([
+      "live_activity:op_inbox",
+      "notification:ntf_inbox",
+      "response:int_answered",
+      "response:int_expired",
+    ]);
+    expect(projectBody.items.every((item) => item.projectId === "prj_inbox")).toBe(true);
+    expect(projectBody.items).toContainEqual(
+      expect.objectContaining({ id: "response:int_expired", result: "Expired" }),
+    );
+    expect((await app.request("/api/activity-feed?project=prj_foreign")).status).toBe(404);
   });
 });

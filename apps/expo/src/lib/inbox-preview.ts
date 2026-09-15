@@ -127,6 +127,8 @@ export const previewActivity: InboxActivityDto[] = Array.from({ length: 24 }, (_
     ...template,
     id: `preview-feed-${index}`,
     sourceImageUrl: PREVIEW_AVATAR_URL,
+    projectId: "preview-project-app",
+    projectName: "Acme App",
     detail: null,
     url: null,
     createdAt: new Date(now - (index + 1) * 15 * 60_000).toISOString(),

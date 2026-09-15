@@ -261,13 +261,14 @@ describe("Android activity agent routes", () => {
       const request = {
         title: "Release",
         status: "Building",
+        project: "Archived replay activity",
         progress: 0.2,
         deviceIds: ["activity_dev_1"],
         expiresInSeconds: 600,
       };
       const created = await start(request, "release-start");
       expect(created.status).toBe(201);
-      const body = (await created.json()) as { activity: { id: string } };
+      const body = (await created.json()) as { activity: { id: string; projectId: string } };
       expect(fcmCalls[0]).toMatchObject({
         token: "fcm-activity-1",
         envelope: {
@@ -285,9 +286,20 @@ describe("Android activity agent routes", () => {
       });
       expect(harkPushEnvelopeSchema.safeParse(fcmCalls[0]?.envelope).success).toBe(true);
 
+      const { eq } = await import("drizzle-orm");
+      await db
+        .update(schema.project)
+        .set({ archivedAt: new Date() })
+        .where(eq(schema.project.id, body.activity.projectId));
+
       expect(await (await start(request, "release-start")).json()).toMatchObject({
         idempotent: true,
       });
+      const [project] = await db
+        .select()
+        .from(schema.project)
+        .where(eq(schema.project.id, body.activity.projectId));
+      expect(project?.archivedAt).not.toBeNull();
       expect(fcmCalls).toHaveLength(1);
 
       const updated = await agent(`/${body.activity.id}`, WRITE_SECRET, {

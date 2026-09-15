@@ -66,4 +66,4 @@ Use `sudo systemctl restart hark` after backend builds and `journalctl -u hark` 
 
 The canonical origin, app API URL, CLI default, and Google OAuth callback now use `https://hark.sole-pierce.ts.net`. The Google redirect is `/api/auth/callback/google` on that origin. Existing webhook tokens remain valid with the new hostname; copy the updated URL from the dashboard.
 
-After each website build, restore versioned APKs from `/vault/userdata/hark/builds/` to `apps/website/dist/client/downloads/`. The current download is `/downloads/hark-android-1.2.2.apk`.
+After each website build, restore versioned APKs from `/vault/userdata/hark/builds/` to `apps/website/dist/client/downloads/`. The current download is `/downloads/hark-android-1.3.0.apk`.

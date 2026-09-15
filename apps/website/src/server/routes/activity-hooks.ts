@@ -23,6 +23,7 @@ import {
 } from "../db/schema";
 import { checkNotificationAllowance, getBilling, trackNotification } from "../lib/billing";
 import { newId } from "../lib/id";
+import { resolveProjectForDelivery } from "../lib/projects";
 import { hashWebhookToken } from "../lib/token";
 import {
   type ActivityRow,
@@ -330,6 +331,9 @@ export const activityHooksRoute = new Hono()
       replaced = await replaceBlockingDeliveries(blockers, now, keyed);
     }
 
+    const projectResolution = parsed.data.project
+      ? await resolveProjectForDelivery(service.userId, parsed.data.project)
+      : { projectId: null };
     const activityId = newId("act");
     const operationId = newId("lao");
     const expiresAt = new Date(now.getTime() + parsed.data.expiresInSeconds * 1000);
@@ -358,6 +362,7 @@ export const activityHooksRoute = new Hono()
             id: activityId,
             userId: service.userId,
             requesterServiceId: service.id,
+            projectId: projectResolution.projectId,
             key: parsed.data.key ?? null,
             schemaVersion: LIVE_ACTIVITY_SCHEMA_VERSION,
             props,
@@ -479,8 +484,20 @@ export const activityHooksRoute = new Hono()
     return c.json(
       response(row ?? created.row, result, {
         ...(parsed.data.replace ? { replaced } : {}),
-        ...(result.accepted === 0
-          ? { message: "No Live Update-capable Android devices accepted the request." }
+        ...([
+          ...(result.accepted === 0
+            ? ["No Live Update-capable Android devices accepted the request."]
+            : []),
+          ...(projectResolution.message ? [projectResolution.message] : []),
+        ].length > 0
+          ? {
+              message: [
+                ...(result.accepted === 0
+                  ? ["No Live Update-capable Android devices accepted the request."]
+                  : []),
+                ...(projectResolution.message ? [projectResolution.message] : []),
+              ].join(" "),
+            }
           : {}),
       }),
       201,

@@ -13,6 +13,7 @@ import type {
   InboxProjectsDto,
   InteractionDto,
   InteractionResponseInput,
+  ProjectListItemDto,
 } from "@hark/contracts";
 import { apiErrorFromBody } from "./api-error";
 import { API_URL, getCookie } from "./auth";
@@ -61,8 +62,11 @@ export const api = {
   listPendingInteractions: () =>
     request<{ interactions: InboxInteractionDto[] }>("/api/interactions"),
   listActiveActivities: () => request<{ activities: InboxLiveActivityDto[] }>("/api/activities"),
-  listActivityFeed: (filter: "all" | InboxActivityKind, page: number) =>
-    request<InboxActivityPageDto>(`/api/activity-feed?filter=${filter}&page=${page}`),
+  listActivityFeed: (filter: "all" | InboxActivityKind, page: number, project?: string) => {
+    const query = new URLSearchParams({ filter, page: String(page) });
+    if (project) query.set("project", project);
+    return request<InboxActivityPageDto>(`/api/activity-feed?${query.toString()}`);
+  },
   respondToInteraction: (id: string, input: InteractionResponseInput) =>
     request<{ interaction: InteractionDto }>(`/api/interactions/${id}/respond`, {
       method: "POST",
@@ -103,4 +107,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
+  listProjects: (archived: "exclude" | "include" | "only" = "include") =>
+    request<{ projects: ProjectListItemDto[] }>(`/api/projects?archived=${archived}`),
 };

@@ -4,6 +4,7 @@ import type {
   DeviceDto,
   EventDto,
   LiveActivityDto,
+  ProjectListItemDto,
   ServiceCreatedResponse,
   ServiceDto,
 } from "@hark/contracts";
@@ -104,6 +105,7 @@ export function Dashboard() {
   const [devices, setDevices] = useState<DeviceDto[] | null>(null);
   const [apiTokens, setApiTokens] = useState<ApiTokenDto[] | null>(null);
   const [billing, setBilling] = useState<BillingDto | null>(null);
+  const [projects, setProjects] = useState<ProjectListItemDto[] | null>(null);
   const [billingActivating, setBillingActivating] = useState(
     () => new URLSearchParams(window.location.search).get("billing") === "success",
   );
@@ -117,20 +119,23 @@ export function Dashboard() {
 
   const refresh = useCallback(async () => {
     try {
-      const [svc, dev, tokenState, activity, liveActivityState, billingState] = await Promise.all([
-        api.listServices(),
-        api.listDevices(),
-        api.listApiTokens(),
-        api.listEvents(),
-        api.listLiveActivities(),
-        api.getBilling(),
-      ]);
+      const [svc, dev, tokenState, activity, liveActivityState, billingState, projectState] =
+        await Promise.all([
+          api.listServices(),
+          api.listDevices(),
+          api.listApiTokens(),
+          api.listEvents(),
+          api.listLiveActivities(),
+          api.getBilling(),
+          api.listProjects("include"),
+        ]);
       setServices(svc.services);
       setDevices(dev.devices);
       setApiTokens(tokenState.tokens);
       setEvents(activity.events);
       setLiveActivities(liveActivityState.activities);
       setBilling(billingState);
+      setProjects(projectState.projects);
     } catch {
       setError("Could not load your dashboard data. Please refresh and try again.");
     }
@@ -329,6 +334,8 @@ export function Dashboard() {
             setApiTokens((current) => current?.filter((token) => token.id !== id) ?? current)
           }
         />
+
+        <Projects onChanged={refresh} projects={projects} />
 
         <Devices devices={devices} billing={billing} onRemoved={() => void refresh()} />
 
@@ -622,6 +629,134 @@ function PlanTier({
         ))}
       </ul>
     </article>
+  );
+}
+
+function Projects({
+  projects,
+  onChanged,
+}: {
+  projects: ProjectListItemDto[] | null;
+  onChanged: () => Promise<void>;
+}) {
+  const activeProjects = projects?.filter((project) => project.archivedAt === null) ?? [];
+  const archivedProjects = projects?.filter((project) => project.archivedAt !== null) ?? [];
+
+  return (
+    <section className="mt-16" aria-labelledby="projects-heading">
+      <div className="mb-4">
+        <h2 id="projects-heading" className="text-lg font-semibold">
+          Projects
+        </h2>
+        <p className="mt-1 text-sm text-ink-subtle">
+          Projects group work by subject. Each message still shows the service or agent that sent
+          it.
+        </p>
+      </div>
+
+      {projects === null ? <p className="py-6 text-sm text-ink-faint">Loading projects…</p> : null}
+      {projects?.length === 0 ? (
+        <p className="border-y border-line py-8 text-sm text-ink-faint">
+          Projects appear when a service or agent sends its first item.
+        </p>
+      ) : null}
+      {activeProjects.length > 0 ? (
+        <ul className="divide-y divide-line border-y border-line">
+          {activeProjects.map((project) => (
+            <ProjectManagementRow key={project.id} onChanged={onChanged} project={project} />
+          ))}
+        </ul>
+      ) : null}
+
+      {archivedProjects.length > 0 ? (
+        <details className="mt-5">
+          <summary className="cursor-pointer text-sm font-medium text-ink-subtle">
+            Archived projects ({archivedProjects.length})
+          </summary>
+          <ul className="mt-2 divide-y divide-line border-y border-line">
+            {archivedProjects.map((project) => (
+              <ProjectManagementRow key={project.id} onChanged={onChanged} project={project} />
+            ))}
+          </ul>
+        </details>
+      ) : null}
+    </section>
+  );
+}
+
+function ProjectManagementRow({
+  project,
+  onChanged,
+}: {
+  project: ProjectListItemDto;
+  onChanged: () => Promise<void>;
+}) {
+  const [name, setName] = useState(project.name);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => setName(project.name), [project.name]);
+
+  const update = async (input: { name?: string; archived?: boolean }) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.updateProject(project.id, input);
+      await onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update this project");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const trimmedName = name.trim();
+  const itemCount = project.notificationCount + project.interactionCount + project.activityCount;
+
+  return (
+    <li className="py-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="min-w-0 flex-1">
+          <label className="sr-only" htmlFor={`project-name-${project.id}`}>
+            Project name
+          </label>
+          <input
+            className="focus:border-accent w-full rounded-lg border border-transparent bg-transparent px-2 py-1 text-sm font-semibold text-ink hover:border-line-strong focus:bg-field focus:outline-none"
+            disabled={busy}
+            id={`project-name-${project.id}`}
+            maxLength={80}
+            onChange={(event) => setName(event.target.value)}
+            value={name}
+          />
+          <p className="px-2 text-xs text-ink-faint">
+            {itemCount} {itemCount === 1 ? "item" : "items"} · {project.unreadCount} unread
+            {project.pendingInteractionCount > 0
+              ? ` · ${project.pendingInteractionCount} awaiting response`
+              : ""}
+            {project.activeActivityCount > 0 ? ` · ${project.activeActivityCount} live` : ""}
+          </p>
+        </div>
+        <div className="flex shrink-0 gap-2">
+          <button
+            className="rounded-full border border-line px-3 py-1.5 text-xs font-medium text-ink-muted transition hover:bg-surface-hover disabled:opacity-50"
+            disabled={busy || !trimmedName || trimmedName === project.name}
+            onClick={() => void update({ name: trimmedName })}
+            type="button"
+          >
+            Save name
+          </button>
+          <button
+            className="rounded-full border border-line px-3 py-1.5 text-xs font-medium text-ink-muted transition hover:bg-surface-hover disabled:opacity-50"
+            disabled={busy}
+            onClick={() => void update({ archived: project.archivedAt === null })}
+            type="button"
+          >
+            {project.archivedAt === null ? "Archive" : "Restore"}
+          </button>
+        </div>
+      </div>
+      {error ? <p className="mt-2 px-2 text-xs text-danger">{error}</p> : null}
+    </li>
   );
 }
 

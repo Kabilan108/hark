@@ -10,6 +10,9 @@ import type {
   EventDto,
   LiveActivityDto,
   PricingPlansDto,
+  ProjectDto,
+  ProjectListItemDto,
+  ProjectUpdateInput,
   ServiceCreatedResponse,
   ServiceCreateInput,
   ServiceDto,
@@ -86,4 +89,11 @@ export const api = {
     request<BillingRedirectResponse>("/api/billing/portal", { method: "POST" }),
   listEvents: (limit = 50) => request<{ events: EventDto[] }>(`/api/events?limit=${limit}`),
   listLiveActivities: () => request<{ activities: LiveActivityDto[] }>("/api/activities"),
+  listProjects: (archived: "exclude" | "include" | "only" = "include") =>
+    request<{ projects: ProjectListItemDto[] }>(`/api/projects?archived=${archived}`),
+  updateProject: (id: string, input: ProjectUpdateInput) =>
+    request<{ project: ProjectDto }>(`/api/projects/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
 };

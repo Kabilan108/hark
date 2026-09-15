@@ -163,6 +163,7 @@ export interface BuildInteractionPushInput {
   responseToken: string;
   expiresAt?: string;
   eventId?: string;
+  projectId?: string;
   imageUrl?: string;
   url?: string;
   primaryLabel?: string;
@@ -193,6 +194,7 @@ export function buildInteractionPushMessages(input: BuildInteractionPushInput): 
       backendOrigin: env.APP_URL,
       targetDeviceId: target.deviceId,
       eventId: input.eventId ?? input.interactionId,
+      ...(input.projectId ? { projectId: input.projectId } : {}),
       title: input.title,
       body: input.prompt,
       ...(input.imageUrl ? { avatarUrl: input.imageUrl } : {}),

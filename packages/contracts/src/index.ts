@@ -294,6 +294,7 @@ export interface EventDto {
   /** Legacy column name. Counts provider acceptance, not confirmed display. */
   deliveredCount: number;
   error: string | null;
+  projectId: string | null;
   createdAt: string;
 }
 
@@ -522,6 +523,8 @@ export const liveActivityStartSchema = z
     accentColor: liveActivityAccentColorSchema.default(LIVE_ACTIVITY_DEFAULT_ACCENT_COLOR),
     style: liveActivityStyleSchema.default("standard"),
     deviceIds: deviceIdsSchema,
+    /** Owner-global project display name. New names create projects on delivery. */
+    project: projectNameSchema.optional(),
     expiresInSeconds: z
       .number()
       .int()
@@ -636,6 +639,7 @@ export type LiveActivityStatus = (typeof LIVE_ACTIVITY_STATUSES)[number];
 
 export interface LiveActivityDto {
   id: string;
+  projectId: string | null;
   key: string | null;
   props: LiveActivityProps;
   status: LiveActivityStatus;
@@ -651,8 +655,6 @@ export interface LiveActivityDto {
 export interface InboxLiveActivityDto extends LiveActivityDto {
   sourceName: string;
   sourceImageUrl: string | null;
-  /** Present when the activity can be associated with a project. */
-  projectId?: string | null;
 }
 
 export interface LiveActivityMutationResponse {
@@ -705,6 +707,8 @@ export const API_TOKEN_SCOPES = [
   "services:write",
   "devices:read",
   "events:read",
+  "projects:read",
+  "projects:write",
 ] as const;
 export const apiTokenScopeSchema = z.enum(API_TOKEN_SCOPES);
 export type ApiTokenScope = z.infer<typeof apiTokenScopeSchema>;
@@ -828,6 +832,8 @@ export const interactionCreateSchema = z
     style: interactiveLiveActivityStyleSchema.optional(),
     primaryLabel: interactionActionLabelSchema.optional(),
     secondaryLabel: interactionActionLabelSchema.optional(),
+    /** Owner-global project display name. New names create projects on delivery. */
+    project: projectNameSchema.optional(),
   })
   .superRefine((value, context) => {
     const presentation = value.presentation ?? "notification";
@@ -933,6 +939,7 @@ export type LiveActivityInteractionResponseInput = z.infer<
 
 export interface InteractionDto {
   id: string;
+  projectId: string | null;
   title: string;
   prompt: string;
   kind: InteractionKind;
@@ -956,8 +963,6 @@ export interface InteractionDto {
 export interface InboxInteractionDto extends InteractionDto {
   sourceName: string;
   sourceImageUrl: string | null;
-  /** Present for webhook interactions created from a project notification. */
-  projectId?: string | null;
 }
 
 export const INBOX_ACTIVITY_KINDS = ["notification", "live_activity", "response"] as const;
@@ -965,6 +970,8 @@ export type InboxActivityKind = (typeof INBOX_ACTIVITY_KINDS)[number];
 
 export interface InboxActivityDto {
   id: string;
+  projectId: string | null;
+  projectName: string | null;
   kind: InboxActivityKind;
   sourceName: string;
   sourceImageUrl: string | null;
@@ -1041,8 +1048,48 @@ export interface AgentNotificationCreateResponse {
 export interface ProjectDto {
   id: string;
   name: string;
+  archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ProjectListItemDto extends ProjectDto {
+  notificationCount: number;
+  interactionCount: number;
+  activityCount: number;
+  unreadCount: number;
+  pendingInteractionCount: number;
+  activeActivityCount: number;
+}
+
+export const projectListQuerySchema = z.object({
+  archived: z.enum(["exclude", "include", "only"]).default("exclude"),
+});
+export type ProjectListQuery = z.infer<typeof projectListQuerySchema>;
+
+export const projectUpdateSchema = z
+  .object({
+    name: projectNameSchema.optional(),
+    archived: z.boolean().optional(),
+  })
+  .refine((input) => Object.keys(input).length > 0, "At least one field is required");
+export type ProjectUpdateInput = z.infer<typeof projectUpdateSchema>;
+
+export const PROJECT_ITEM_TYPES = ["event", "notification", "interaction", "activity"] as const;
+export const projectItemTypeSchema = z.enum(PROJECT_ITEM_TYPES);
+export type ProjectItemType = z.infer<typeof projectItemTypeSchema>;
+
+export const projectMoveItemSchema = z.object({
+  projectId: z.string().trim().min(1).max(100).nullable(),
+});
+export type ProjectMoveItemInput = z.infer<typeof projectMoveItemSchema>;
+
+export interface ProjectMoveItemResponse {
+  item: {
+    type: ProjectItemType;
+    id: string;
+    projectId: string | null;
+  };
 }
 
 /** Reserved project filter naming the synthetic bucket of unfiled notifications. */
@@ -1065,6 +1112,10 @@ export interface InboxProjectSummaryDto {
   /** Resolved image from the latest notification; older servers omit it. */
   latestImageUrl?: string | null;
   latestAt: string | null;
+  /** Pending standalone decisions associated with this project. */
+  pendingInteractionCount?: number;
+  /** Active standalone Live Activities associated with this project. */
+  activeActivityCount?: number;
 }
 
 export interface InboxProjectsDto {
@@ -1241,6 +1292,7 @@ export const androidLiveActivityStateSchema = liveActivityPropsSchema.safeExtend
 export const androidActivityEnvelopeSchema = pushEnvelopeBaseSchema.extend({
   kind: z.literal("activity"),
   activityId: z.string().trim().min(1).max(100),
+  projectId: z.string().trim().min(1).max(100).optional(),
   sequence: z.number().int().nonnegative(),
   event: z.enum(["start", "update", "end"]),
   state: androidLiveActivityStateSchema,

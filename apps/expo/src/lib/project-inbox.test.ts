@@ -1,12 +1,40 @@
 import type { InboxNotificationSummaryDto, InboxProjectSummaryDto } from "@hark/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  activityForProject,
   canMarkAllRead,
   loadedUnreadCount,
   markLoadedItemsRead,
   normalizeReadThroughToken,
+  optionalProjectLookup,
   projectSummaryUnread,
 } from "./project-inbox";
+
+describe("activityForProject", () => {
+  it("keeps exact project matches and excludes other projects and legacy rows", () => {
+    const rows: Array<{ id: string; projectId?: string | null }> = [
+      { id: "matching", projectId: "prj_1" },
+      { id: "other", projectId: "prj_2" },
+      { id: "unfiled", projectId: null },
+      { id: "legacy" },
+    ];
+
+    expect(activityForProject(rows, "prj_1").map((row) => row.id)).toEqual(["matching"]);
+    expect(activityForProject(rows, null).map((row) => row.id)).toEqual(["unfiled"]);
+  });
+});
+
+describe("optionalProjectLookup", () => {
+  it("lets older servers without project management keep loading the project inbox", async () => {
+    await expect(optionalProjectLookup(Promise.reject({ status: 404 }))).resolves.toBeNull();
+  });
+
+  it("keeps other endpoint failures visible", async () => {
+    await expect(optionalProjectLookup(Promise.reject({ status: 500 }))).rejects.toEqual({
+      status: 500,
+    });
+  });
+});
 
 function summary(projectId: string | null, unreadCount: number): InboxProjectSummaryDto {
   return {

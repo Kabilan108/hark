@@ -35,7 +35,10 @@ harkctl
 ├─ activity     start · update · end · get · list
 ├─ permissions  setup · doctor · uninstall
 ├─ devices      list
-└─ services     create · list
+├─ services     create · list
+├─ projects     list · rename · archive · unarchive · move
+├─ skill        services · list · help
+└─ completions  bash · zsh · fish
 ```
 
 Start a browser authorization flow and approve the requested scopes with your signed-in Hark account:
@@ -45,16 +48,24 @@ harkctl auth login
 harkctl auth status
 harkctl notify "Deploy finished ✅" --title "Deploy bot" --image https://example.com/bot.png \
   --url https://example.com/runs/1
-harkctl notify ask "Deploy production?" --approval --wait --timeout 15m --json
-harkctl notify ask "What should the release note say?" --text --device dev_... --poll
+harkctl notify ask "Deploy production?" --approval --wait --timeout 15m
+harkctl notify ask "What should the release note say?" --text --device dev_...
+harkctl notify ask "Deploy production?" --approval --project "Acme App"
 harkctl services create --title "Release bot" --image https://example.com/bot.png
 harkctl activity start --key release-main --title "Release" --status "Building" --progress 0.1 \
-  --accent-color '#FF9F0A'
+  --accent-color '#FF9F0A' --project "Acme App"
 harkctl activity update release-main --status "Testing" --progress 0.7 \
   --accent-color '#64D2FF' --if-sequence 0
 harkctl activity end release-main --status "Complete" --progress 1 --if-sequence 1
+harkctl projects list
+harkctl projects move int_... --kind interaction --project "Acme App"
+harkctl projects move evt_... --kind event --unfiled
 harkctl auth logout
 ```
+
+`harkctl skill` prints the bundled Hark agent skill. `harkctl skill services` prints its
+integration-service reference. These commands work outside a Hark checkout and do not load
+credentials. `harkctl completions bash|zsh|fish` prints an offline shell completion script.
 
 Login prints a short code and verification URL to stderr, opens the system browser when interactive,
 polls at the server-provided interval, and atomically writes credentials to a mode-`0600` file. The
@@ -63,16 +74,19 @@ webhook services without requesting `events:read`. Every requested scope is show
 approval. Connected tokens appear under **Dashboard > Agent connections**, where they can be revoked.
 
 Use repeatable `--scope`, `--client-name`, and `--expires-in` to narrow or label access. `--no-open`
-suppresses browser launch; `--open` explicitly enables it in non-interactive environments. `--json`
-keeps stdout to one machine-readable object while browser instructions remain on stderr.
+suppresses browser launch; `--open` explicitly enables it in non-interactive environments. API
+commands print one JSON object by default, while browser instructions remain on stderr.
 
 ## notify
 
-`harkctl notify <body>` sends a one-shot push to your registered iPhones. `--title` sets the sender
+`harkctl notify <body>` sends a one-shot push to your registered devices. `--title` sets the sender
 name (defaults to “Hark”), `--image` sets the avatar shown with the notification, `--url` is opened
 when the notification is tapped, and repeatable `--device` routes to specific device IDs (Hark Pro).
-Use `--idempotency-key` for safe retries and `--stdin` to merge a JSON payload from stdin under any
-explicit flags. The command exits `7` when no push was accepted.
+For a retry, reuse an `--idempotency-key` only with the identical payload. Hark reuses the existing
+operation, while a changed payload conflicts. This is not an exactly-once device-delivery guarantee.
+The key is scoped to the sender and operation. `--stdin` reads a top-level notification request
+object such as `{"body":"Done","project":"Hark"}`; positional text and explicit flags override
+matching fields. The command exits `7` when no push was accepted.
 
 Bodies hold up to 8,000 characters (16 KiB of UTF-8); the CLI rejects anything larger before
 sending. `--project <name>` files the notification into a named project in the Hark app inbox —
@@ -102,12 +116,12 @@ the notification, and iOS can require an unlock or shortcut-specific permission.
 (Approve/Deny buttons), `--yes-no` (Yes/No buttons), or `--text` (a short free-form reply). It
 shares the appearance flags above
 plus `--expires-in` (default `15m`). Without a waiting flag it returns the pending interaction
-immediately; read the answer later with `interaction get` or `interaction wait`. With `--wait
-[--timeout <duration>]` it blocks until the answer arrives or the timeout passes. With `--poll` it
-waits at most 20 seconds to catch an instant answer and then returns. A timed-out poll or wait
-does not end the prompt — it stays answerable on the phone until it expires, and
-`harkctl interaction wait <id>` resumes waiting at any time; `--poll` cannot be combined with
-`--wait` or `--timeout`.
+immediately. Read `.interaction.id` from that JSON and pass it to `interaction get` or
+`interaction wait`. With `--wait [--timeout <duration>]` it blocks until the answer arrives or the
+timeout passes. A timed-out wait does not end the prompt; it stays answerable on the phone.
+For an approval gate, use `--approval --wait` and require `.interaction.status == "approved"`.
+Creating a pending interaction exits `0`, and `interaction get` also exits `0` while it remains
+pending. A successful command alone is not approval.
 
 Use `--live-activity` with `--approval` or `--yes-no` to put the decision directly on the Lock
 Screen and expanded Dynamic Island. Optional `--primary-label` and `--secondary-label` customize
@@ -134,6 +148,30 @@ Inside `notify`, a first positional of exactly `ask` selects the subcommand. Eve
 `interaction wait <id> [--timeout <duration>]` long-polls until the interaction is answered,
 canceled, or expired, or the timeout passes (default `60s`).
 
+## projects
+
+Project commands use the same machine connection as notification and activity commands. List active
+projects with `projects list`; pass `--archived include` or `--archived only` when you need archived
+entries. Rename, archive, or restore a project by ID:
+
+```sh
+harkctl projects rename prj_... "Acme Platform"
+harkctl projects archive prj_...
+harkctl projects unarchive prj_...
+```
+
+Move an existing item by giving its ID, kind, and active project name. Kinds are `event`,
+`notification`, `interaction`, and `activity`. Project lookup is case-insensitive. Use `--unfiled`
+instead of `--project` to move the item into the shared Other bucket.
+
+```sh
+harkctl projects move evt_... --kind event --project "Acme Platform"
+harkctl projects move evt_... --kind event --unfiled
+```
+
+Project management requires `projects:read` and `projects:write`. A default `auth login` requests
+both scopes. Connections created before these scopes were added need to sign in again.
+
 ## services
 
 `services create --title <title> [--image <url>] [--url <url>]` creates a persistent webhook
@@ -145,8 +183,12 @@ logins created before this scope was added need to sign in again.
 
 ## activity
 
-Activity commands accept flags or `--stdin` JSON. Use `activity get <id|key>` and `activity list` to
-inspect state, `--idempotency-key` for retries, and `--if-sequence` to reject stale updates. Progress
+Activity commands accept flags or `--stdin` JSON. For example,
+`printf '%s' '{"title":"Release","status":"Building","progress":0.1}' | harkctl activity start --stdin`
+uses the activity request's top-level fields. Explicit flags override matching stdin fields. Read
+`.activity.id` and `.activity.sequence` from the response. Use `activity get <id|key>` and
+`activity list` to inspect state. Pass the last returned sequence to `--if-sequence` so an update or
+end fails if another operation won the race. Progress
 is a number from 0 to 1. `--accent-color` accepts `#RRGGBB`. `--style` on `activity start` and
 `activity update` picks the widget layout: `standard` (default), `ring`, `hero`, `terminal`, or
 `steps`; app builds that predate a style render the standard layout until updated. Activities default to an eight-hour
@@ -161,7 +203,7 @@ Activity flag inventory:
 
 - Start: `--title`, `--status`, `--key`, `--detail`, `--progress`, `--symbol`, `--privacy`,
   `--style`, `--accent-color`, repeatable `--device`, `--expires-in`, `--stale-after`, `--replace`,
-  `--idempotency-key`, and `--stdin`.
+  `--project`, `--idempotency-key`, and `--stdin`.
 - Update: `--title`, `--status`, `--detail`, `--progress`, `--symbol`, `--privacy`, `--style`,
   `--accent-color`, `--stale-after`, `--if-sequence`, `--idempotency-key`, and `--stdin`.
 - End: `--status`, `--detail`, `--progress`, `--symbol`, `--accent-color`, `--dismiss-after`,
@@ -216,7 +258,12 @@ with mode `0600`:
 - Windows: `%APPDATA%\hark\config.json`
 
 Use `HARK_API_URL` for a self-hosted API. Tokens are never accepted on the command line or printed to
-stdout. All successful command output is one stable JSON object; diagnostics use stderr.
+stdout. Successful API commands print one JSON object; `--help`, `skill`, and `completions` print
+plain text. Diagnostics use stderr. Durations accept a non-negative number with an optional `s`,
+`m`, `h`, or `d` suffix. No suffix means seconds, and decimal results round to whole seconds.
 
-Exit codes: `0` success/approved/yes/replied, `1` API error, `2` usage error, `3` authentication or
-scope error, `4` timeout/canceled/expired, `5` denied/no, `6` network error, `7` no push accepted.
+Exit code `0` means the command succeeded; after a completed wait it also covers
+approved/yes/replied. Inspect `.interaction.status` because a newly created or pending interaction
+can also exit `0`. Other codes are `1` API or unexpected error, `2` usage error, `3` authentication
+or scope error, `4` timeout/canceled/expired, `5` denied/no, `6` network error, and `7` no push
+accepted.

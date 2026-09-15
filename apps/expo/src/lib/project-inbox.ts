@@ -64,3 +64,27 @@ export function markLoadedItemsRead(
 ): InboxNotificationSummaryDto[] {
   return items.map((item) => (item.readAt === null ? { ...item, readAt } : item));
 }
+
+/**
+ * Keep project history scoped on the client as well as the server. Older
+ * servers ignore the project query, and older activity DTOs have no project
+ * ID, so neither can appear in a project's feed.
+ */
+export function activityForProject<T extends { projectId?: string | null }>(
+  items: readonly T[],
+  projectId: string | null,
+): T[] {
+  return items.filter((item) => item.projectId !== undefined && item.projectId === projectId);
+}
+
+/** Treat a missing project-management route as an older supported server. */
+export async function optionalProjectLookup<T>(request: Promise<T>): Promise<T | null> {
+  try {
+    return await request;
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "status" in error && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}

@@ -21,6 +21,7 @@ import {
   liveActivityInteractionResponseRoute,
 } from "./routes/interactions";
 import { servicesRoute } from "./routes/services";
+import { projectsAgentRoute, projectsSessionRoute } from "./routes/projects";
 
 export const app = new Hono();
 
@@ -57,6 +58,7 @@ app.route("/api/api-tokens", apiTokensRoute);
 app.route("/api/device-authorization", deviceAuthorizationRoute);
 app.route("/api/agent/activities", activitiesAgentRoute);
 app.route("/api/agent", agentRoute);
+app.route("/api/agent/projects", projectsAgentRoute);
 app.route("/api/activities", activitiesSessionRoute);
 app.route("/api/activity-feed", activityFeedRoute);
 app.route("/api/inbox", inboxRoute);
@@ -66,6 +68,7 @@ app.route("/api/live-activity-interactions", liveActivityInteractionResponseRout
 app.route("/api/billing", billingRoute);
 app.route("/api/devices", devicesRoute);
 app.route("/api/events", eventsRoute);
+app.route("/api/projects", projectsSessionRoute);
 app.route("/hooks", activityHooksRoute);
 app.route("/hooks", hooksRoute);
 

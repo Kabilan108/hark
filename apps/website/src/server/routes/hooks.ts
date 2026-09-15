@@ -337,6 +337,7 @@ export const hooksRoute = new Hono()
         userId: svc.userId,
         requesterServiceId: svc.id,
         eventId,
+        projectId: projectResolution.projectId,
         title: resolved.title,
         prompt: resolved.body,
         kind,
@@ -404,6 +405,7 @@ export const hooksRoute = new Hono()
           actionDigest: interactionActionDigest as string,
           responseToken: responseToken as string,
           expiresAt: (interactionExpiresAt as Date).toISOString(),
+          ...(projectResolution.projectId ? { projectId: projectResolution.projectId } : {}),
           imageUrl: resolved.imageUrl,
           url: resolved.url,
         })

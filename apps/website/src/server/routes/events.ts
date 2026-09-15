@@ -22,6 +22,7 @@ export const eventsRoute = new Hono<AuthedEnv>().use("*", requireAuth).get("/", 
       status: event.status,
       deliveredCount: event.deliveredCount,
       error: event.error,
+      projectId: event.projectId,
       createdAt: event.createdAt,
     })
     .from(event)

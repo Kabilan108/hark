@@ -1,10 +1,18 @@
-import type { InboxNotificationSummaryDto } from "@hark/contracts";
+import type {
+  InboxActivityDto,
+  InboxInteractionDto,
+  InboxLiveActivityDto,
+  InboxNotificationSummaryDto,
+} from "@hark/contracts";
+import * as Notifications from "expo-notifications";
 import { Redirect, useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import * as SecureStore from "expo-secure-store";
 import { StatusBar } from "expo-status-bar";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   FlatList,
   Pressable,
   RefreshControl,
@@ -15,17 +23,27 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../src/lib/api";
 import { useSession } from "../../src/lib/auth";
-import { previewNotifications, previewProjects } from "../../src/lib/inbox-preview";
+import {
+  previewActive,
+  previewActivity,
+  previewNotifications,
+  previewPending,
+  previewProjects,
+} from "../../src/lib/inbox-preview";
+import { DEVICE_ID_KEY, submitInteractionResponse } from "../../src/lib/interactions";
 import { PREVIEW_MODE } from "../../src/lib/preview";
 import {
+  activityForProject,
   canMarkAllRead,
   loadedUnreadCount,
   markLoadedItemsRead,
   normalizeReadThroughToken,
+  optionalProjectLookup,
   projectSummaryUnread,
 } from "../../src/lib/project-inbox";
 import { SymbolView } from "../../src/lib/symbol-view";
 import { createThemedStyles, fonts, tightTracking } from "../../src/lib/theme";
+import { ActiveRow, ActivityRow, PendingRow } from "../inbox";
 
 const PAGE_SIZE = 30;
 
@@ -35,10 +53,22 @@ export default function ProjectScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ project: string; name?: string }>();
   const projectParam = typeof params.project === "string" ? params.project : "unfiled";
-  const title = typeof params.name === "string" && params.name ? params.name : "Notifications";
+  const projectId = projectParam === "unfiled" ? null : projectParam;
+  const routeTitle = typeof params.name === "string" && params.name ? params.name : "Notifications";
+  const [title, setTitle] = useState(routeTitle);
   const simulatorPreview = PREVIEW_MODE;
 
   const [items, setItems] = useState<InboxNotificationSummaryDto[]>([]);
+  const [pending, setPending] = useState<InboxInteractionDto[]>([]);
+  const [active, setActive] = useState<InboxLiveActivityDto[]>([]);
+  const [history, setHistory] = useState<InboxActivityDto[]>([]);
+  const [historyPage, setHistoryPage] = useState(0);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [replyingTo, setReplyingTo] = useState<string | null>(null);
+  const [reply, setReply] = useState("");
+  const [respondingTo, setRespondingTo] = useState<string | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [unreadOnly, setUnreadOnly] = useState(false);
   // Authoritative unread count from the project summary API. It also covers
@@ -56,6 +86,12 @@ export default function ProjectScreen() {
   const loadToken = useRef(0);
   const loadedOnce = useRef(false);
 
+  useEffect(() => {
+    void SecureStore.getItemAsync(DEVICE_ID_KEY).then((value) =>
+      setDeviceId(value ?? (simulatorPreview ? "preview-device" : null)),
+    );
+  }, []);
+
   const loadFirstPage = useCallback(
     async (unread: boolean) => {
       // One token guards both requests, so overlapping loads (focus refresh
@@ -63,10 +99,15 @@ export default function ProjectScreen() {
       // pages or summaries into fresher state.
       const token = ++loadToken.current;
       if (simulatorPreview) {
-        const filtered = unread
-          ? previewNotifications.filter((item) => item.readAt === null)
-          : previewNotifications;
+        const inProject = previewNotifications.filter((item) => item.projectId === projectId);
+        const filtered = unread ? inProject.filter((item) => item.readAt === null) : inProject;
         setItems(filtered);
+        setPending(previewPending.filter((item) => (item.projectId ?? null) === projectId));
+        setActive(previewActive.filter((item) => (item.projectId ?? null) === projectId));
+        const projectHistory = activityForProject(previewActivity, projectId);
+        setHistory(projectHistory.slice(0, 20));
+        setHistoryPage(0);
+        setHistoryHasMore(false);
         // No server issues tokens in preview; mark-all short-circuits anyway.
         setReadThrough("preview");
         setNextCursor(null);
@@ -75,13 +116,33 @@ export default function ProjectScreen() {
         return;
       }
       try {
-        const [page, projects] = await Promise.all([
-          api.listInboxNotifications({ project: projectParam, unread, limit: PAGE_SIZE }),
-          // The summary is an enhancement; its failure never blocks the list.
-          api.listInboxProjects().catch(() => null),
-        ]);
+        const [page, projects, ownerProjects, interactions, activities, activityHistory] =
+          await Promise.all([
+            api.listInboxNotifications({ project: projectParam, unread, limit: PAGE_SIZE }),
+            // The summary is an enhancement; its failure never blocks the list.
+            api.listInboxProjects().catch(() => null),
+            optionalProjectLookup(api.listProjects("include")),
+            api.listPendingInteractions(),
+            api.listActiveActivities(),
+            api.listActivityFeed("all", 0, projectParam),
+          ]);
         if (token !== loadToken.current) return;
         setItems(page.items);
+        setPending(
+          interactions.interactions.filter((item) => (item.projectId ?? null) === projectId),
+        );
+        setActive(activities.activities.filter((item) => (item.projectId ?? null) === projectId));
+        setHistory(activityForProject(activityHistory.items, projectId));
+        setHistoryPage(activityHistory.page);
+        setHistoryHasMore(
+          (activityHistory.page + 1) * activityHistory.pageSize < activityHistory.total,
+        );
+        setTitle(
+          projectId === null
+            ? "Other"
+            : (ownerProjects?.projects.find((project) => project.id === projectId)?.name ??
+                routeTitle),
+        );
         setReadThrough(normalizeReadThroughToken(page.readThroughToken));
         setNextCursor(page.nextCursor);
         if (projects) setSummaryUnread(projectSummaryUnread(projects.projects, projectParam));
@@ -91,8 +152,44 @@ export default function ProjectScreen() {
         setLoadError(true);
       }
     },
-    [projectParam],
+    [projectId, projectParam, routeTitle],
   );
+
+  const resolveItem = async (
+    item: InboxInteractionDto,
+    action: "approve" | "deny" | "yes" | "no" | "reply",
+    response?: string,
+  ) => {
+    if (!deviceId || respondingTo) return;
+    setRespondingTo(item.id);
+    try {
+      if (!simulatorPreview) {
+        if (action === "reply") {
+          await submitInteractionResponse(item.id, {
+            action,
+            response: response?.trim() ?? "",
+            actionDigest: item.actionDigest,
+          });
+        } else {
+          await submitInteractionResponse(item.id, {
+            action,
+            actionDigest: item.actionDigest,
+          });
+        }
+      }
+      setPending((current) => current.filter((candidate) => candidate.id !== item.id));
+      setReplyingTo(null);
+      setReply("");
+      if (!simulatorPreview) await loadFirstPage(unreadOnly);
+    } catch (error) {
+      Alert.alert(
+        "Could not save response",
+        error instanceof Error ? error.message : "Please try again.",
+      );
+    } finally {
+      setRespondingTo(null);
+    }
+  };
 
   // Reload on every focus — including the return from the detail screen,
   // which marks a notification read — and whenever the unread filter flips.
@@ -107,6 +204,21 @@ export default function ProjectScreen() {
       });
     }, [loadFirstPage, session, unreadOnly]),
   );
+
+  useEffect(() => {
+    if (!session && !simulatorPreview) return;
+    const refresh = () => void loadFirstPage(unreadOnly);
+    const timer = setInterval(refresh, 15_000);
+    const appStateSubscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") refresh();
+    });
+    const notificationSubscription = Notifications.addNotificationReceivedListener(refresh);
+    return () => {
+      clearInterval(timer);
+      appStateSubscription.remove();
+      notificationSubscription.remove();
+    };
+  }, [loadFirstPage, session, unreadOnly]);
 
   const loadMore = async () => {
     if (!nextCursor || loadingMore || simulatorPreview) return;
@@ -127,6 +239,28 @@ export default function ProjectScreen() {
       // Keep the loaded slice; the footer button retries on the next scroll.
     } finally {
       setLoadingMore(false);
+    }
+  };
+
+  const loadMoreHistory = async () => {
+    if (loadingHistory || !historyHasMore || simulatorPreview) return;
+    setLoadingHistory(true);
+    try {
+      const page = await api.listActivityFeed("all", historyPage + 1, projectParam);
+      const projectItems = activityForProject(page.items, projectId);
+      setHistory((current) => {
+        const known = new Set(current.map((item) => `${item.kind}:${item.id}`));
+        return [
+          ...current,
+          ...projectItems.filter((item) => !known.has(`${item.kind}:${item.id}`)),
+        ];
+      });
+      setHistoryPage(page.page);
+      setHistoryHasMore((page.page + 1) * page.pageSize < page.total);
+    } catch {
+      // Keep the loaded history; the button remains available to retry.
+    } finally {
+      setLoadingHistory(false);
     }
   };
 
@@ -207,34 +341,6 @@ export default function ProjectScreen() {
         </Pressable>
       </View>
 
-      <View style={styles.filterRow}>
-        {(
-          [
-            { label: "All", value: false },
-            { label: "Unread", value: true },
-          ] as const
-        ).map((option) => {
-          const selected = unreadOnly === option.value;
-          return (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityState={{ selected }}
-              key={option.label}
-              onPress={() => setUnreadOnly(option.value)}
-              style={({ pressed }) => [
-                styles.filterOption,
-                selected && styles.filterOptionSelected,
-                pressed && styles.filterOptionPressed,
-              ]}
-            >
-              <Text style={[styles.filterLabel, selected && styles.filterLabelSelected]}>
-                {option.label}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
-
       {loading ? (
         <ActivityIndicator color={colors.accent} style={styles.loading} />
       ) : (
@@ -244,6 +350,75 @@ export default function ProjectScreen() {
           keyExtractor={(item) => item.id}
           onEndReached={() => void loadMore()}
           onEndReachedThreshold={0.4}
+          ListHeaderComponent={
+            <>
+              {pending.length > 0 ? (
+                <View style={styles.relatedSection}>
+                  <Text style={styles.sectionHeading}>Needs your response</Text>
+                  {pending.map((item, index) => (
+                    <PendingRow
+                      item={item}
+                      key={item.id}
+                      first={index === 0}
+                      replying={replyingTo === item.id}
+                      reply={reply}
+                      onReplyChange={setReply}
+                      onStartReply={() => setReplyingTo(item.id)}
+                      onCancelReply={() => {
+                        setReplyingTo(null);
+                        setReply("");
+                      }}
+                      onResolve={(action, response) => void resolveItem(item, action, response)}
+                      responding={respondingTo === item.id}
+                    />
+                  ))}
+                </View>
+              ) : null}
+              {loadError ? (
+                <Text style={styles.refreshError}>
+                  Couldn’t refresh this project. Pull to retry.
+                </Text>
+              ) : null}
+              {active.length > 0 ? (
+                <View style={styles.relatedSection}>
+                  <Text style={styles.sectionHeading}>Live Updates</Text>
+                  {active.map((item, index) => (
+                    <ActiveRow item={item} key={item.id} first={index === 0} />
+                  ))}
+                </View>
+              ) : null}
+              <View style={styles.messageHeader}>
+                <Text style={styles.sectionHeading}>Messages</Text>
+                <View style={styles.filterRow}>
+                  {(
+                    [
+                      { label: "All", value: false },
+                      { label: "Unread", value: true },
+                    ] as const
+                  ).map((option) => {
+                    const selected = unreadOnly === option.value;
+                    return (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityState={{ selected }}
+                        key={option.label}
+                        onPress={() => setUnreadOnly(option.value)}
+                        style={({ pressed }) => [
+                          styles.filterOption,
+                          selected && styles.filterOptionSelected,
+                          pressed && styles.filterOptionPressed,
+                        ]}
+                      >
+                        <Text style={[styles.filterLabel, selected && styles.filterLabelSelected]}>
+                          {option.label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+            </>
+          }
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -261,9 +436,36 @@ export default function ProjectScreen() {
             </Text>
           }
           ListFooterComponent={
-            loadingMore ? (
-              <ActivityIndicator color={colors.accent} style={styles.footerLoading} />
-            ) : null
+            <>
+              {loadingMore ? (
+                <ActivityIndicator color={colors.accent} style={styles.footerLoading} />
+              ) : null}
+              <View style={styles.historySection}>
+                <Text style={styles.sectionHeading}>History</Text>
+                {history.length > 0 ? (
+                  history.map((item, index) => (
+                    <ActivityRow item={item} key={`${item.kind}:${item.id}`} first={index === 0} />
+                  ))
+                ) : (
+                  <Text style={styles.emptyHistory}>No project activity yet.</Text>
+                )}
+                {historyHasMore ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={loadingHistory}
+                    onPress={() => void loadMoreHistory()}
+                    style={({ pressed }) => [
+                      styles.loadHistoryButton,
+                      pressed && styles.filterOptionPressed,
+                    ]}
+                  >
+                    <Text style={styles.loadHistoryText}>
+                      {loadingHistory ? "Loading…" : "Load older activity"}
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            </>
           }
           renderItem={({ item }) => (
             <NotificationRow
@@ -359,10 +561,68 @@ const useStyles = createThemedStyles((colors) => ({
   filterRow: {
     flexDirection: "row",
     gap: 6,
-    paddingHorizontal: 24,
-    paddingBottom: 8,
+  },
+  messageHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    paddingTop: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.line,
+  },
+  relatedSection: {
+    marginBottom: 12,
+  },
+  historySection: {
+    marginTop: 18,
+  },
+  emptyHistory: {
+    paddingVertical: 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.line,
+    color: colors.soft,
+    fontFamily: fonts.regular,
+    fontSize: 13,
+    letterSpacing: tightTracking(13),
+  },
+  refreshError: {
+    marginVertical: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.line,
+    borderRadius: 12,
+    backgroundColor: colors.surface,
+    color: colors.muted,
+    fontFamily: fonts.regular,
+    fontSize: 12,
+    lineHeight: 17,
+    letterSpacing: tightTracking(12),
+  },
+  loadHistoryButton: {
+    minHeight: 42,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.line,
+    borderRadius: 21,
+    backgroundColor: colors.surface,
+  },
+  loadHistoryText: {
+    color: colors.accent,
+    fontFamily: fonts.medium,
+    fontSize: 13,
+    letterSpacing: tightTracking(13),
+  },
+  sectionHeading: {
+    paddingVertical: 10,
+    color: colors.soft,
+    fontFamily: fonts.semibold,
+    fontSize: 11,
+    letterSpacing: 0.7,
+    textTransform: "uppercase",
   },
   filterOption: {
     minHeight: 36,

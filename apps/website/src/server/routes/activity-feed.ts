@@ -1,7 +1,12 @@
-import { INBOX_ACTIVITY_KINDS, type InboxActivityDto } from "@hark/contracts";
-import { sql } from "drizzle-orm";
+import {
+  INBOX_ACTIVITY_KINDS,
+  INBOX_UNFILED_PROJECT,
+  type InboxActivityDto,
+} from "@hark/contracts";
+import { and, eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { db } from "../db";
+import { project } from "../db/schema";
 import { type AuthedEnv, requireAuth } from "../middleware";
 
 const PAGE_SIZE = 20;
@@ -11,6 +16,8 @@ type ActivityFilter = (typeof FILTERS)[number];
 
 interface ActivityFeedRow {
   id: string;
+  projectId: string | null;
+  projectName: string | null;
   kind: "notification" | "live_activity" | "response";
   sourceName: string;
   sourceImageUrl: string | null;
@@ -33,12 +40,32 @@ export const activityFeedRoute = new Hono<AuthedEnv>().use("*", requireAuth).get
     return c.json({ error: "Invalid activity page" }, 400);
   }
   const userId = c.get("user").id;
+  const projectParam = c.req.query("project");
+  if (projectParam !== undefined && (projectParam.length === 0 || projectParam.length > 100)) {
+    return c.json({ error: "Invalid project filter" }, 400);
+  }
+  if (projectParam && projectParam !== INBOX_UNFILED_PROJECT) {
+    const [owned] = await db
+      .select({ id: project.id })
+      .from(project)
+      .where(and(eq(project.id, projectParam), eq(project.userId, userId)))
+      .limit(1);
+    if (!owned) return c.json({ error: "Project not found" }, 404);
+  }
   const filterClause = filter === "all" ? sql`1 = 1` : sql`kind = ${filter}`;
+  const projectClause =
+    projectParam === undefined
+      ? sql`1 = 1`
+      : projectParam === INBOX_UNFILED_PROJECT
+        ? sql`project_id is null`
+        : sql`project_id = ${projectParam}`;
   const offset = requestedPage * PAGE_SIZE;
 
   const rows = db.all(sql`
     select
       id,
+      project_id as projectId,
+      (select p.name from project p where p.id = feed.project_id and p.user_id = ${userId}) as projectName,
       kind,
       source_name as sourceName,
       source_image_url as sourceImageUrl,
@@ -51,6 +78,7 @@ export const activityFeedRoute = new Hono<AuthedEnv>().use("*", requireAuth).get
     from (
       select
         'event:' || e.id as id,
+        e.project_id as project_id,
         'notification' as kind,
         s.title as source_name,
         coalesce(e.image_url, s.image_url) as source_image_url,
@@ -70,6 +98,7 @@ export const activityFeedRoute = new Hono<AuthedEnv>().use("*", requireAuth).get
 
       select
         'notification:' || n.id as id,
+        n.project_id as project_id,
         'notification' as kind,
         t.name as source_name,
         n.image_url as source_image_url,
@@ -86,6 +115,7 @@ export const activityFeedRoute = new Hono<AuthedEnv>().use("*", requireAuth).get
 
       select
         'response:' || i.id as id,
+        i.project_id as project_id,
         'response' as kind,
         coalesce(s.title, t.name, i.title) as source_name,
         coalesce(i.image_url, s.image_url) as source_image_url,
@@ -93,24 +123,30 @@ export const activityFeedRoute = new Hono<AuthedEnv>().use("*", requireAuth).get
         i.prompt as detail,
         i.url as url,
         case i.status
+          when 'pending' then 'Expired'
           when 'approved' then 'Approved'
           when 'denied' then 'Denied'
           when 'yes' then 'Yes'
           when 'no' then 'No'
+          when 'canceled' then 'Canceled'
+          when 'expired' then 'Expired'
           else 'Replied'
         end as result,
-        i.responded_at as created_at
+        coalesce(i.responded_at, i.canceled_at, i.expires_at) as created_at
       from interaction i
       left join api_token t on t.id = i.requester_token_id
       left join service s on s.id = i.requester_service_id
       where i.user_id = ${userId}
-        and i.status in ('approved', 'denied', 'yes', 'no', 'replied')
-        and i.responded_at is not null
+        and (
+          i.status in ('approved', 'denied', 'yes', 'no', 'replied', 'canceled', 'expired')
+          or (i.status = 'pending' and i.expires_at <= ${Date.now()})
+        )
 
       union all
 
       select
         'live_activity:' || o.id as id,
+        a.project_id as project_id,
         'live_activity' as kind,
         coalesce(s.title, t.name, 'Hark') as source_name,
         s.image_url as source_image_url,
@@ -137,7 +173,7 @@ export const activityFeedRoute = new Hono<AuthedEnv>().use("*", requireAuth).get
       where a.user_id = ${userId}
         and a.interaction_id is null
     ) feed
-    where ${filterClause}
+    where ${filterClause} and ${projectClause}
     order by created_at desc, id desc
     limit ${PAGE_SIZE}
     offset ${offset}
@@ -145,6 +181,8 @@ export const activityFeedRoute = new Hono<AuthedEnv>().use("*", requireAuth).get
 
   const items: InboxActivityDto[] = rows.map((row) => ({
     id: row.id,
+    projectId: row.projectId,
+    projectName: row.projectName,
     kind: row.kind,
     sourceName: row.sourceName,
     sourceImageUrl: row.sourceImageUrl,

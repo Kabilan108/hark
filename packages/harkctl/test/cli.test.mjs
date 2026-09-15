@@ -16,12 +16,15 @@ test("parses repeatable devices and notify ask options", () => {
     "--device=dev_b",
     "--expires-in",
     "10m",
+    "--project",
+    "Acme App",
     "--wait",
     "--json",
   ]);
   assert.deepEqual(parsed.positionals, ["notify", "ask", "Deploy production?"]);
   assert.deepEqual(parsed.options.device, ["dev_a", "dev_b"]);
   assert.equal(parsed.options.approval, true);
+  assert.equal(parsed.options.project, "Acme App");
   assert.equal(parsed.options.wait, true);
   assert.equal(parsed.options.json, true);
   assert.equal(parsed.separatorAt, null);
@@ -103,6 +106,112 @@ test("creates a webhook service with default appearance", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("projects list, rename, archive, and unarchive use the project API", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    if (init.method === "PATCH") {
+      return Response.json({ project: { id: "prj_1", name: "Platform" } });
+    }
+    return Response.json({ projects: [] });
+  };
+  try {
+    const env = { HARK_TOKEN: "hark_test", HARK_API_URL: "https://example.test" };
+    await execute(["projects", "list", "--archived", "include"], env);
+    await execute(["projects", "rename", "prj_1", "Platform", "Tools"], env);
+    await execute(["projects", "archive", "prj_1"], env);
+    await execute(["projects", "unarchive", "prj_1"], env);
+
+    assert.equal(calls[0].url, "https://example.test/api/agent/projects?archived=include");
+    assert.equal(calls[1].url, "https://example.test/api/agent/projects/prj_1");
+    assert.equal(calls[1].init.method, "PATCH");
+    assert.deepEqual(JSON.parse(calls[1].init.body), { name: "Platform Tools" });
+    assert.deepEqual(JSON.parse(calls[2].init.body), { archived: true });
+    assert.deepEqual(JSON.parse(calls[3].init.body), { archived: false });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("projects move resolves an active project name and moves the typed item", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    if (init.method === "POST") {
+      return Response.json({ item: { type: "interaction", id: "int_1", projectId: "prj_1" } });
+    }
+    return Response.json({
+      projects: [{ id: "prj_1", name: "Caf\u00e9", archivedAt: null }],
+    });
+  };
+  try {
+    const result = await execute(
+      ["projects", "move", "int_1", "--kind", "interaction", "--project", "CAFE\u0301"],
+      { HARK_TOKEN: "hark_test", HARK_API_URL: "https://example.test" },
+    );
+
+    assert.equal(calls[0].url, "https://example.test/api/agent/projects?archived=exclude");
+    assert.equal(
+      calls[1].url,
+      "https://example.test/api/agent/projects/items/interaction/int_1/move",
+    );
+    assert.equal(calls[1].init.method, "POST");
+    assert.deepEqual(JSON.parse(calls[1].init.body), { projectId: "prj_1" });
+    assert.equal(result.body.item.projectId, "prj_1");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("projects move sends null directly for the unfiled bucket", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    return Response.json({ item: { type: "event", id: "evt_1", projectId: null } });
+  };
+  try {
+    const result = await execute(["projects", "move", "evt_1", "--kind", "event", "--unfiled"], {
+      HARK_TOKEN: "hark_test",
+      HARK_API_URL: "https://example.test",
+    });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, "https://example.test/api/agent/projects/items/event/evt_1/move");
+    assert.deepEqual(JSON.parse(calls[0].init.body), { projectId: null });
+    assert.equal(result.body.item.projectId, null);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("projects commands reject invalid selectors before mutation", async () => {
+  await assert.rejects(
+    execute(["projects", "list", "--archived", "sometimes"], { HARK_TOKEN: "hark_test" }),
+    /--archived must be exclude, include, or only/,
+  );
+  await assert.rejects(
+    execute(["projects", "move", "evt_1", "--kind", "message", "--project", "Acme"], {
+      HARK_TOKEN: "hark_test",
+    }),
+    /--kind must be event, notification, interaction, or activity/,
+  );
+  await assert.rejects(
+    execute(["projects", "move", "evt_1", "--kind", "event"], {
+      HARK_TOKEN: "hark_test",
+    }),
+    /exactly one of --project or --unfiled/,
+  );
+  await assert.rejects(
+    execute(["projects", "move", "evt_1", "--kind", "event", "--project", "Acme", "--unfiled"], {
+      HARK_TOKEN: "hark_test",
+    }),
+    /exactly one of --project or --unfiled/,
+  );
 });
 
 test("auth login polls through pending and slow_down without opening a non-TTY browser", async () => {
@@ -230,6 +339,46 @@ test("auth login opens only when interactive or explicitly requested", async () 
     assert.equal(opened, 1);
     await execute(["auth", "login", "--no-open"], {}, { ...overrides, stderrIsTTY: true });
     assert.equal(opened, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("auth login requests project management scopes by default", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestedScopes;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith("/start")) {
+      requestedScopes = JSON.parse(init.body).scopes;
+      return Response.json(
+        {
+          deviceCode: "p".repeat(43),
+          userCode: "PROJ-2345",
+          verificationUri: "https://example.test/cli/authorize",
+          verificationUriComplete: "https://example.test/cli/authorize?code=PROJ-2345",
+          expiresIn: 600,
+          interval: 1,
+        },
+        { status: 201 },
+      );
+    }
+    return Response.json({
+      accessToken: `hark_${"p".repeat(43)}`,
+      token: { id: "tok_projects", name: "harkctl", prefix: "hark_pppppppp", scopes: [] },
+    });
+  };
+  try {
+    await execute(
+      ["auth", "login", "--no-open"],
+      { HARK_API_URL: "https://example.test" },
+      {
+        sleep: async () => {},
+        stderr: () => {},
+        writeConfig: async () => {},
+      },
+    );
+    assert.equal(requestedScopes.includes("projects:read"), true);
+    assert.equal(requestedScopes.includes("projects:write"), true);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -549,13 +698,7 @@ test("notify bounds bodies to the server limits before sending", async () => {
   }
 });
 
-test("notify ask rejects the notify-only project and format flags", async () => {
-  await assert.rejects(
-    execute(["notify", "ask", "Deploy?", "--approval", "--project", "Acme"], {
-      HARK_TOKEN: "hark_test",
-    }),
-    /apply to notify, not notify ask/,
-  );
+test("notify ask rejects notify-only format flags", async () => {
   await assert.rejects(
     execute(["notify", "ask", "Deploy?", "--approval", "--markdown"], {
       HARK_TOKEN: "hark_test",
@@ -601,6 +744,7 @@ test("notify ask sends the normalized approval request body with an image", asyn
       expiresInSeconds: 600,
       imageUrl: "https://example.com/bot.png",
       deviceIds: ["dev_a"],
+      project: "Acme App",
     });
     return Response.json({
       accepted: 1,
@@ -620,6 +764,8 @@ test("notify ask sends the normalized approval request body with an image", asyn
         "https://example.com/bot.png",
         "--device",
         "dev_a",
+        "--project",
+        "Acme App",
         "--expires-in",
         "10m",
         "--idempotency-key",
@@ -926,6 +1072,7 @@ test("activity start sends normalized finite progress and routing", async () => 
       deviceIds: ["dev_a", "dev_b"],
       expiresInSeconds: 3600,
       staleAfterSeconds: 300,
+      project: "Acme App",
     });
     return Response.json({ accepted: 2, failed: 0, activity: { id: "act_1", sequence: 0 } });
   };
@@ -961,6 +1108,8 @@ test("activity start sends normalized finite progress and routing", async () => 
         "1h",
         "--stale-after",
         "5m",
+        "--project",
+        "Acme App",
         "--idempotency-key",
         "build-start-1",
       ],

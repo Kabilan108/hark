@@ -34,6 +34,7 @@ import { checkNotificationAllowance, getBilling, trackNotification } from "../li
 import { sendFcmMessages } from "../lib/fcm";
 import { newId } from "../lib/id";
 import { createLiveActivityInteractionCredential } from "../lib/live-activity-interaction";
+import { resolveProjectForDelivery } from "../lib/projects";
 import {
   type AgentEnv,
   type AuthedEnv,
@@ -72,6 +73,7 @@ function idempotencyKey(value: string | undefined): string | undefined | null {
 export function toLiveActivityDto(row: ActivityRow): LiveActivityDto {
   return {
     id: row.id,
+    projectId: row.projectId,
     key: row.key,
     props: liveActivityPropsSchema.parse(row.props),
     status: row.status as LiveActivityStatus,
@@ -373,6 +375,7 @@ async function sendDeliveryEvent(
           backendOrigin: env.APP_URL.replace(/\/$/, ""),
           targetDeviceId: delivery.deviceId,
           activityId: row.id,
+          ...(row.projectId ? { projectId: row.projectId } : {}),
           sequence: row.sequence,
           event: eventName,
           state: interactionState ? { ...baseProps, interaction: interactionState } : baseProps,
@@ -571,6 +574,7 @@ export async function startInteractionLiveActivity(
         requesterTokenId: interactionRow.requesterTokenId,
         requesterServiceId: interactionRow.requesterServiceId,
         interactionId: interactionRow.id,
+        projectId: interactionRow.projectId,
         schemaVersion: LIVE_ACTIVITY_SCHEMA_VERSION,
         props,
         status: "starting",
@@ -1110,6 +1114,9 @@ export const activitiesAgentRoute = new Hono<AgentEnv>()
       replaced = await replaceBlockingDeliveries(blockers, now, keyed);
     }
 
+    const projectResolution = parsed.data.project
+      ? await resolveProjectForDelivery(token.userId, parsed.data.project)
+      : { projectId: null };
     const apnsTimestamp = Math.floor(now.getTime() / 1000);
     const activityId = newId("act");
     const props: LiveActivityProps = {
@@ -1129,6 +1136,7 @@ export const activitiesAgentRoute = new Hono<AgentEnv>()
       id: activityId,
       userId: token.userId,
       requesterTokenId: token.id,
+      projectId: projectResolution.projectId,
       key: parsed.data.key ?? null,
       schemaVersion: LIVE_ACTIVITY_SCHEMA_VERSION,
       props,
@@ -1269,11 +1277,25 @@ export const activitiesAgentRoute = new Hono<AgentEnv>()
         accepted: result.accepted,
         failed: result.failed,
         ...(parsed.data.replace ? { replaced } : {}),
-        ...(result.accepted === 0
-          ? {
-              message:
+        ...([
+          ...(result.accepted === 0
+            ? [
                 result.errors.join("; ") ||
-                "No Live Update-capable Android devices are registered for this account.",
+                  "No Live Update-capable Android devices are registered for this account.",
+              ]
+            : []),
+          ...(projectResolution.message ? [projectResolution.message] : []),
+        ].length > 0
+          ? {
+              message: [
+                ...(result.accepted === 0
+                  ? [
+                      result.errors.join("; ") ||
+                        "No Live Update-capable Android devices are registered for this account.",
+                    ]
+                  : []),
+                ...(projectResolution.message ? [projectResolution.message] : []),
+              ].join(" "),
             }
           : {}),
       },

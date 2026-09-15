@@ -71,6 +71,23 @@ describe("resolveProjectForDelivery", () => {
     expect(await projectCount(OTHER_USER)).toBe(1);
   });
 
+  it("restores an archived project when a fresh delivery reuses its name", async () => {
+    const { eq } = await import("drizzle-orm");
+    const first = await resolveProjectForDelivery(OTHER_USER, "Archived delivery");
+    await db
+      .update(schema.project)
+      .set({ archivedAt: new Date() })
+      .where(eq(schema.project.id, first.projectId as string));
+
+    const restored = await resolveProjectForDelivery(OTHER_USER, "ARCHIVED DELIVERY");
+    expect(restored.projectId).toBe(first.projectId);
+    const [row] = await db
+      .select()
+      .from(schema.project)
+      .where(eq(schema.project.id, first.projectId as string));
+    expect(row?.archivedAt).toBeNull();
+  });
+
   it("collapses a same-name concurrent race onto one project", async () => {
     const results = await Promise.all(
       Array.from({ length: 6 }, () => resolveProjectForDelivery(OTHER_USER, "Same Name Race")),
@@ -79,7 +96,7 @@ describe("resolveProjectForDelivery", () => {
     expect(ids.size).toBe(1);
     expect([...ids][0]).toBeTruthy();
     expect(results.every((result) => result.message === undefined)).toBe(true);
-    expect(await projectCount(OTHER_USER)).toBe(2);
+    expect(await projectCount(OTHER_USER)).toBe(3);
   });
 
   it("never exceeds the cap under concurrent distinct-name deliveries", async () => {
@@ -112,7 +129,7 @@ describe("resolveProjectForDelivery", () => {
     const result = await resolveProjectForDelivery(USER, "One project too many");
     expect(result).toEqual({
       projectId: null,
-      message: `Project limit reached (${MAX_PROJECTS_PER_ACCOUNT} per account); the notification was stored without a project.`,
+      message: `Project limit reached (${MAX_PROJECTS_PER_ACCOUNT} per account); the item was stored without a project.`,
     });
     expect(await projectCount(USER)).toBe(MAX_PROJECTS_PER_ACCOUNT);
   });

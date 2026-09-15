@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { chmod, mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
+import { completionFor } from "./completions.mjs";
 import { main as permissionsMain } from "./permissions/cli.mjs";
 
 const DEFAULT_API_URL = "https://hark.sole-pierce.ts.net";
@@ -15,6 +16,8 @@ const DEFAULT_SCOPES = [
   "devices:read",
   "services:read",
   "services:write",
+  "projects:read",
+  "projects:write",
 ];
 const TERMINAL = new Set(["approved", "denied", "yes", "no", "replied", "canceled", "expired"]);
 
@@ -136,6 +139,8 @@ export function parseArgs(argv) {
     "project",
     "summary",
     "body-format",
+    "kind",
+    "archived",
   ]);
   const booleanFlags = new Set([
     "approval",
@@ -151,6 +156,7 @@ export function parseArgs(argv) {
     "no-open",
     "live-activity",
     "markdown",
+    "unfiled",
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -422,14 +428,14 @@ async function waitForInteraction(config, id, timeoutSeconds, runtime) {
 function help() {
   return `Usage:
   harkctl auth login [--client-name <name>] [--scope <scope>] [--expires-in <duration>]
-                     [--timeout <duration>] [--open|--no-open] [--json]
+                     [--timeout <duration>] [--open|--no-open]
   harkctl auth logout
   harkctl auth status
   harkctl notify <body> [--title <name>] [--image <url>] [--url <url>] [--device <id>]
                  [--project <name>] [--summary <text>] [--markdown | --body-format <text|markdown>]
                  [--idempotency-key <key>] [--stdin]
   harkctl notify ask <prompt> (--approval|--yes-no|--text) [--title <name>] [--image <url>]
-                  [--url <url>] [--device <id>] [--expires-in <duration>]
+                  [--url <url>] [--device <id>] [--project <name>] [--expires-in <duration>]
                   [--live-activity [--style <approval|shell|verdict|signal>]
                                    [--primary-label <label>] [--secondary-label <label>]]
                   [--idempotency-key <key>] [--stdin] [--wait [--timeout <duration>] | --poll]
@@ -439,7 +445,7 @@ function help() {
                          [--progress <0..1>] [--symbol <symbol>] [--privacy <standard|private>]
                          [--style <standard|ring|hero|terminal|steps>] [--accent-color <#RRGGBB>]
                          [--device <id>...] [--expires-in <duration>] [--stale-after <duration>]
-                         [--replace] [--idempotency-key <key>] [--stdin]
+                         [--project <name>] [--replace] [--idempotency-key <key>] [--stdin]
   harkctl activity update <id|key> [--title <title>] [--status <status>] [--detail <text>]
                             [--progress <0..1>] [--symbol <symbol>] [--privacy <standard|private>]
                             [--style <standard|ring|hero|terminal|steps>] [--accent-color <#RRGGBB>]
@@ -457,22 +463,85 @@ function help() {
   harkctl devices list
   harkctl services list
   harkctl services create --title <title> [--image <url>] [--url <url>] [--stdin]
+  harkctl projects list [--archived <exclude|include|only>]
+  harkctl projects rename <project-id> <name>
+  harkctl projects archive <project-id>
+  harkctl projects unarchive <project-id>
+  harkctl projects move <item-id> --kind <event|notification|interaction|activity>
+                         (--project <name>|--unfiled)
+  harkctl skill [services|list|help]
+  harkctl completions <bash|zsh|fish>
 
-notify sends a one-shot push; notify ask sends a push that elicits an answer.
-Inside notify, a first positional of exactly "ask" selects the subcommand. Everything
-after a bare "--" is treated as positional, so "harkctl notify -- ask" sends the
-literal body "ask". --wait blocks until the answer or timeout; --poll waits at most
-${POLL_TIMEOUT_SECONDS} seconds to catch an instant answer. A timed-out poll or wait does
-not end the prompt: it stays answerable on the phone until it expires, and
-harkctl interaction wait <id> resumes waiting at any time.
+API commands print one JSON object. --help, skill, and completions print plain text.
+Diagnostics go to stderr; request failures may produce no JSON on stdout.
 
-notify bodies can hold up to 8,000 characters (16 KiB of UTF-8). --project files the
-notification into a named project in the Hark app inbox, --summary sets the short
-push/preview text for a long body, and --markdown (or --body-format markdown) records
-how the body should eventually render. Project names are case-insensitive per account.
+Exit code 0 means the command succeeded. After a completed wait it also covers
+approved/yes/replied. A newly created or still-pending interaction can exit 0, so
+an approval gate must use --approval --wait and require interaction.status "approved".
+Other codes: 1 API or unexpected error; 2 usage error; 3 authentication or scope
+error; 4 timeout/canceled/expired; 5 denied/no; 6 network error; 7 no push accepted.
+
+notify returns notification.id. notify ask --wait waits for a decision; --timeout
+defaults to --expires-in, which defaults to 15 minutes. A shorter timeout returns
+without canceling the phone prompt. Without --wait, read interaction.id from the
+creation response and pass it to interaction get or interaction wait; interaction
+wait defaults to 60 seconds.
+
+Activity start returns activity.id and activity.sequence. Use the ID or the explicit
+start key as the positional <id|key> for get, update, and end. Pass the last returned
+sequence to --if-sequence so a stale update or end fails. --replace lets start end
+the current task activity on each target device before taking its slot.
+
+--stdin reads one JSON object for notify, notify ask, services create, and activity
+start/update/end. Examples are {"body":"Done"}, {"prompt":"Deploy?"}, and
+{"title":"Build","status":"Running","progress":0.5}. A positional body or prompt
+and explicit flags override matching stdin fields.
+
+Durations are non-negative numbers, optionally followed by s, m, h, or d; no suffix
+means seconds. Decimal results are rounded to whole seconds. Use an idempotency key
+again only with the identical payload for the same operation
+and sender. Hark reuses the existing operation; a changed payload returns a conflict.
+This does not guarantee exactly-once display on a device.
+
+notify bodies can hold up to 8,000 characters (16 KiB of UTF-8). --summary sets the
+short push and preview text. --markdown and --body-format markdown record Markdown
+metadata; the current app renders plain text with tappable links. --project selects a
+named project for the item. Projects group
+inbox items. Services provide separate webhook credentials and sender defaults for
+scripts and external integrations.
+Project names are case-insensitive per account and are created on first use.
 
 Authentication: run harkctl auth login, or set HARK_TOKEN for an advanced manual setup.
-Tokens are never accepted as command arguments.`;
+Tokens are never accepted as command arguments.
+
+Inside notify, a first positional of exactly "ask" selects the subcommand. Everything
+after a bare "--" is positional, so "harkctl notify -- ask" sends the literal body
+"ask". --poll remains available for compatibility and waits at most
+${POLL_TIMEOUT_SECONDS} seconds for an immediate answer.`;
+}
+
+const SKILL_REFERENCES = new Map([["services", "references/services.md"]]);
+
+function skillHelp() {
+  return `Usage:
+  harkctl skill
+  harkctl skill <reference>
+  harkctl skill list
+
+With no reference, prints the Hark skill. Available references:
+  services`;
+}
+
+async function readBundledSkill(reference) {
+  if (reference === "help") return skillHelp();
+  if (reference === "list") return [...SKILL_REFERENCES.keys()].join("\n");
+  const relativePath = reference ? SKILL_REFERENCES.get(reference) : "SKILL.md";
+  if (!relativePath) {
+    throw new UsageError(
+      `Unknown skill reference: ${reference}. Run harkctl skill list for available references.`,
+    );
+  }
+  return readFile(new URL(`../generated/skill/${relativePath}`, import.meta.url), "utf8");
 }
 
 export async function execute(argv, env = process.env, overrides = {}) {
@@ -498,6 +567,20 @@ export async function execute(argv, env = process.env, overrides = {}) {
     const body = await permissionsMain(positionals.slice(1));
     if (body?.help) return { body, exitCode: 0, text: true };
     return { body: body ?? { ok: true }, exitCode: 0 };
+  }
+
+  if (group === "skill") {
+    if (positionals.length > 2) {
+      throw new UsageError("skill accepts at most one reference name");
+    }
+    return { body: { output: await readBundledSkill(action) }, exitCode: 0, text: true };
+  }
+
+  if (group === "completions") {
+    if (!action || positionals.length > 2 || !["bash", "zsh", "fish"].includes(action)) {
+      throw new UsageError("completions requires one shell: bash, zsh, or fish");
+    }
+    return { body: { output: completionFor(action) }, exitCode: 0, text: true };
   }
 
   const config = await loadConfig(env);
@@ -548,6 +631,74 @@ export async function execute(argv, env = process.env, overrides = {}) {
       exitCode: 0,
     };
   }
+  if (group === "projects" && action === "list") {
+    const archived = options.archived ?? "exclude";
+    if (!["exclude", "include", "only"].includes(archived)) {
+      throw new UsageError("--archived must be exclude, include, or only");
+    }
+    return {
+      body: await request(config, `/api/agent/projects?archived=${archived}`),
+      exitCode: 0,
+    };
+  }
+  if (group === "projects" && action === "rename") {
+    const projectId = id;
+    const name = positionals.slice(3).join(" ").trim();
+    if (!projectId || !name) {
+      throw new UsageError("projects rename requires a project ID and name");
+    }
+    return {
+      body: await request(config, `/api/agent/projects/${encodeURIComponent(projectId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name }),
+      }),
+      exitCode: 0,
+    };
+  }
+  if (group === "projects" && (action === "archive" || action === "unarchive")) {
+    if (!id) throw new UsageError(`projects ${action} requires a project ID`);
+    return {
+      body: await request(config, `/api/agent/projects/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ archived: action === "archive" }),
+      }),
+      exitCode: 0,
+    };
+  }
+  if (group === "projects" && action === "move") {
+    if (!id || !options.kind) {
+      throw new UsageError("projects move requires an item ID and --kind");
+    }
+    if (Boolean(options.project) === Boolean(options.unfiled)) {
+      throw new UsageError("projects move requires exactly one of --project or --unfiled");
+    }
+    if (!["event", "notification", "interaction", "activity"].includes(options.kind)) {
+      throw new UsageError("--kind must be event, notification, interaction, or activity");
+    }
+    let projectId = null;
+    if (options.project) {
+      const listed = await request(config, "/api/agent/projects?archived=exclude");
+      const normalizedName = String(options.project).trim().normalize("NFC").toLowerCase();
+      const project = listed.projects?.find(
+        (candidate) => candidate.name.trim().normalize("NFC").toLowerCase() === normalizedName,
+      );
+      if (!project) {
+        throw new UsageError(`No active project named ${JSON.stringify(options.project)}`);
+      }
+      projectId = project.id;
+    }
+    return {
+      body: await request(
+        config,
+        `/api/agent/projects/items/${encodeURIComponent(options.kind)}/${encodeURIComponent(id)}/move`,
+        {
+          method: "POST",
+          body: JSON.stringify({ projectId }),
+        },
+      ),
+      exitCode: 0,
+    };
+  }
   if (group === "activity" && action === "list") {
     const limit = options.limit ? Number.parseInt(options.limit, 10) : 50;
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
@@ -594,6 +745,7 @@ export async function execute(argv, env = process.env, overrides = {}) {
       ...(options["stale-after"]
         ? { staleAfterSeconds: parseDuration(options["stale-after"]) }
         : {}),
+      ...(options.project ? { project: options.project } : {}),
     };
     const body = await request(config, "/api/agent/activities", {
       method: "POST",
@@ -720,9 +872,9 @@ export async function execute(argv, env = process.env, overrides = {}) {
       if (options.timeout !== undefined && !options.wait) {
         throw new UsageError("--timeout requires --wait");
       }
-      if (options.project || options.summary || options.markdown || options["body-format"]) {
+      if (options.summary || options.markdown || options["body-format"]) {
         throw new UsageError(
-          "--project, --summary, --markdown, and --body-format apply to notify, not notify ask",
+          "--summary, --markdown, and --body-format apply to notify, not notify ask",
         );
       }
       const stdin = options.stdin ? await readStdinJson() : {};
@@ -759,6 +911,7 @@ export async function execute(argv, env = process.env, overrides = {}) {
         ...(options.image ? { imageUrl: options.image } : {}),
         ...(options.url ? { url: options.url } : {}),
         ...(options.device.length > 0 ? { deviceIds: options.device } : {}),
+        ...(options.project ? { project: options.project } : {}),
       };
       const body = await request(config, "/api/agent/interactions", {
         method: "POST",
@@ -809,7 +962,7 @@ export async function execute(argv, env = process.env, overrides = {}) {
 export async function run(argv, env = process.env, overrides = {}) {
   try {
     const result = await execute(argv, env, overrides);
-    if (result.text) console.log(result.body.help);
+    if (result.text) console.log(result.body.output ?? result.body.help);
     else console.log(JSON.stringify(result.body));
     return result.exitCode;
   } catch (error) {

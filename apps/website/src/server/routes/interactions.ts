@@ -58,6 +58,7 @@ function digest(value: unknown): string {
 function toDto(row: InteractionRow): InteractionDto {
   return {
     id: row.id,
+    projectId: row.projectId,
     title: row.title,
     prompt: row.prompt,
     kind: row.kind as InteractionKind,
@@ -276,6 +277,7 @@ export const agentRoute = new Hono<AgentEnv>()
         status: event.status,
         deliveredCount: event.deliveredCount,
         error: event.error,
+        projectId: event.projectId,
         createdAt: event.createdAt,
       })
       .from(event)
@@ -672,6 +674,9 @@ export const agentRoute = new Hono<AgentEnv>()
     }
 
     const now = new Date();
+    const projectResolution = parsed.data.project
+      ? await resolveProjectForDelivery(token.userId, parsed.data.project)
+      : { projectId: null };
     const interactionId = newId("int");
     const responseToken = generateInteractionResponseToken();
     const choices =
@@ -709,6 +714,7 @@ export const agentRoute = new Hono<AgentEnv>()
       id: interactionId,
       userId: token.userId,
       requesterTokenId: token.id,
+      projectId: projectResolution.projectId,
       title: parsed.data.title,
       prompt: parsed.data.prompt,
       kind: parsed.data.kind,
@@ -773,7 +779,12 @@ export const agentRoute = new Hono<AgentEnv>()
         {
           interaction: toDto(row),
           accepted: 0,
-          message: "No active Android devices are registered for this account.",
+          message: [
+            "No active Android devices are registered for this account.",
+            projectResolution.message,
+          ]
+            .filter(Boolean)
+            .join(" "),
         },
         201,
       );
@@ -813,8 +824,20 @@ export const agentRoute = new Hono<AgentEnv>()
           interaction: toDto(row),
           accepted: liveResult.accepted,
           ...(liveResult.activityId ? { liveActivityId: liveResult.activityId } : {}),
-          ...(liveResult.accepted === 0
-            ? { message: "No interactive Live Updates were accepted by FCM." }
+          ...([
+            ...(liveResult.accepted === 0
+              ? ["No interactive Live Updates were accepted by FCM."]
+              : []),
+            ...(projectResolution.message ? [projectResolution.message] : []),
+          ].length > 0
+            ? {
+                message: [
+                  ...(liveResult.accepted === 0
+                    ? ["No interactive Live Updates were accepted by FCM."]
+                    : []),
+                  ...(projectResolution.message ? [projectResolution.message] : []),
+                ].join(" "),
+              }
             : {}),
         },
         201,
@@ -831,6 +854,7 @@ export const agentRoute = new Hono<AgentEnv>()
       actionDigest,
       responseToken,
       expiresAt: row.expiresAt.toISOString(),
+      ...(row.projectId ? { projectId: row.projectId } : {}),
       imageUrl: parsed.data.imageUrl,
       url: parsed.data.url,
     });
@@ -882,7 +906,17 @@ export const agentRoute = new Hono<AgentEnv>()
         interaction: toDto(row),
         accepted: result.accepted,
         // Provider errors can embed push tokens, so the reason is deliberately coarse.
-        ...(result.accepted === 0 ? { message: "No notifications were accepted by FCM." } : {}),
+        ...([
+          ...(result.accepted === 0 ? ["No notifications were accepted by FCM."] : []),
+          ...(projectResolution.message ? [projectResolution.message] : []),
+        ].length > 0
+          ? {
+              message: [
+                ...(result.accepted === 0 ? ["No notifications were accepted by FCM."] : []),
+                ...(projectResolution.message ? [projectResolution.message] : []),
+              ].join(" "),
+            }
+          : {}),
       },
       201,
     );
@@ -952,7 +986,7 @@ export const interactionResponseRoute = new Hono<AuthedEnv>()
         tokenName: apiToken.name,
         serviceName: service.title,
         serviceImageUrl: service.imageUrl,
-        projectId: event.projectId,
+        projectId: interaction.projectId,
       })
       .from(interaction)
       .leftJoin(apiToken, eq(interaction.requesterTokenId, apiToken.id))

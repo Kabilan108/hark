@@ -148,6 +148,49 @@ describe("project inbox migration on a populated database", () => {
     expect(row.projectId).toBeNull();
   });
 
+  it("sets interaction and Live Activity project references to null on delete", () => {
+    const now = Date.now();
+    sqlite
+      .prepare(
+        "insert into project (id, user_id, name, normalized_name, created_at, updated_at) values (?, ?, ?, ?, ?, ?)",
+      )
+      .run("prj_linked", "user_legacy", "Linked", "linked", now, now);
+    sqlite
+      .prepare(
+        "insert into interaction (id, user_id, requester_token_id, project_id, title, prompt, kind, choices, action_digest, expires_at, created_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        "int_linked",
+        "user_legacy",
+        "tok_legacy",
+        "prj_linked",
+        "Decision",
+        "Approve?",
+        "approval",
+        '["approve","deny"]',
+        "a".repeat(64),
+        now + 60_000,
+        now,
+      );
+    sqlite
+      .prepare(
+        "insert into live_activity (id, user_id, requester_token_id, project_id, schema_version, props, status, expires_at, created_at, updated_at) values (?, ?, ?, ?, 1, '{}', 'active', ?, ?, ?)",
+      )
+      .run("act_linked", "user_legacy", "tok_legacy", "prj_linked", now + 60_000, now, now);
+
+    sqlite.prepare("delete from project where id = ?").run("prj_linked");
+    expect(
+      sqlite
+        .prepare("select project_id as projectId from interaction where id = ?")
+        .get("int_linked"),
+    ).toEqual({ projectId: null });
+    expect(
+      sqlite
+        .prepare("select project_id as projectId from live_activity where id = ?")
+        .get("act_linked"),
+    ).toEqual({ projectId: null });
+  });
+
   it("created the partial unread indexes", () => {
     const indexes = sqlite
       .prepare("select name from sqlite_master where type = 'index' and name in (?, ?, ?, ?)")
@@ -174,5 +217,88 @@ describe("project inbox migration on a populated database", () => {
         "promoted_notifications_capable",
       ]),
     );
+  });
+
+  it("backfills project links when upgrading from 0020 to 0021", () => {
+    const upgradeRoot = mkdtempSync(join(tmpdir(), "hark-project-link-upgrade-"));
+    const folder = join(upgradeRoot, "drizzle");
+    cpSync(MIGRATIONS_SOURCE, folder, { recursive: true });
+    const journalPath = join(folder, "meta", "_journal.json");
+    const journal = JSON.parse(readFileSync(journalPath, "utf8")) as {
+      entries: JournalEntry[];
+    };
+    const projectLinkEntry = journal.entries.find(
+      (entry) => entry.tag === "0021_brainy_rachel_grey",
+    );
+    expect(projectLinkEntry).toBeDefined();
+    writeFileSync(
+      journalPath,
+      JSON.stringify({
+        ...journal,
+        entries: journal.entries.filter(
+          (entry) => entry.idx < (projectLinkEntry?.idx ?? Number.MAX_SAFE_INTEGER),
+        ),
+      }),
+    );
+    const database = new Database(":memory:");
+    try {
+      runMigrationsFrom(folder, database);
+      const now = Date.now();
+      database
+        .prepare(
+          "insert into user (id, name, email, email_verified, created_at, updated_at) values ('upgrade_user', 'Upgrade', 'upgrade@example.com', 1, ?, ?)",
+        )
+        .run(now, now);
+      database
+        .prepare(
+          "insert into service (id, user_id, title, token_hash, created_at, updated_at) values ('upgrade_service', 'upgrade_user', 'Upgrade', 'upgrade-service-hash', ?, ?)",
+        )
+        .run(now, now);
+      database
+        .prepare(
+          "insert into api_token (id, user_id, name, token_hash, prefix, scopes, created_at) values ('upgrade_token', 'upgrade_user', 'Upgrade', 'upgrade-token-hash', 'hark_upg', '[]', ?)",
+        )
+        .run(now);
+      database
+        .prepare(
+          "insert into project (id, user_id, name, normalized_name, created_at, updated_at) values ('upgrade_project', 'upgrade_user', 'Upgrade', 'upgrade', ?, ?)",
+        )
+        .run(now, now);
+      database
+        .prepare(
+          "insert into event (id, service_id, project_id, title, body, status, created_at) values ('upgrade_event', 'upgrade_service', 'upgrade_project', 'Upgrade', 'Body', 'accepted', ?)",
+        )
+        .run(now);
+      database
+        .prepare(
+          "insert into interaction (id, user_id, requester_token_id, event_id, title, prompt, kind, choices, action_digest, expires_at, created_at) values ('upgrade_interaction', 'upgrade_user', 'upgrade_token', 'upgrade_event', 'Decision', 'Approve?', 'approval', '[\"approve\",\"deny\"]', ?, ?, ?)",
+        )
+        .run("a".repeat(64), now + 60_000, now);
+      database
+        .prepare(
+          "insert into live_activity (id, user_id, requester_token_id, interaction_id, schema_version, props, status, expires_at, created_at, updated_at) values ('upgrade_activity', 'upgrade_user', 'upgrade_token', 'upgrade_interaction', 1, '{}', 'active', ?, ?, ?)",
+        )
+        .run(now + 60_000, now, now);
+
+      writeFileSync(journalPath, JSON.stringify(journal));
+      runMigrationsFrom(folder, database);
+      expect(
+        database
+          .prepare(
+            "select project_id as projectId from interaction where id = 'upgrade_interaction'",
+          )
+          .get(),
+      ).toEqual({ projectId: "upgrade_project" });
+      expect(
+        database
+          .prepare(
+            "select project_id as projectId from live_activity where id = 'upgrade_activity'",
+          )
+          .get(),
+      ).toEqual({ projectId: "upgrade_project" });
+    } finally {
+      database.close();
+      rmSync(upgradeRoot, { recursive: true, force: true });
+    }
   });
 });

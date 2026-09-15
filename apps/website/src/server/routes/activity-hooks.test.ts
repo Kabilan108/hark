@@ -217,13 +217,36 @@ describe("Android activity webhook routes", () => {
   });
 
   it("replays idempotent requests without sending duplicate messages", async () => {
-    const first = await start(TOKEN, "deploy-start");
+    const request = {
+      title: "Deploy #184",
+      status: "Building",
+      project: "Archived webhook replay",
+      deviceIds: ["hook_activity_device"],
+    };
+    const first = await activityRequest(TOKEN, "", "POST", request, "deploy-start");
     const firstBody = (await first.json()) as { activityId: string };
-    expect(await (await start(TOKEN, "deploy-start")).json()).toMatchObject({
+    const { eq } = await import("drizzle-orm");
+    const [activity] = await db
+      .select()
+      .from(schema.liveActivity)
+      .where(eq(schema.liveActivity.id, firstBody.activityId));
+    await db
+      .update(schema.project)
+      .set({ archivedAt: new Date() })
+      .where(eq(schema.project.id, activity?.projectId as string));
+
+    expect(
+      await (await activityRequest(TOKEN, "", "POST", request, "deploy-start")).json(),
+    ).toMatchObject({
       ok: true,
       activityId: firstBody.activityId,
       idempotent: true,
     });
+    const [project] = await db
+      .select()
+      .from(schema.project)
+      .where(eq(schema.project.id, activity?.projectId as string));
+    expect(project?.archivedAt).not.toBeNull();
     expect(fcmCalls).toHaveLength(1);
   });
 

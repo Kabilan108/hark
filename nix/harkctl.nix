@@ -3,6 +3,7 @@
 let
   inherit (pkgs)
     fetchPnpmDeps
+    installShellFiles
     lib
     makeWrapper
     nodejs_24
@@ -21,7 +22,7 @@ let
     inherit root;
     fileset = lib.fileset.unions [
       ../packages/harkctl
-      ../skills/hark/SKILL.md
+      ../skills/hark
     ];
   };
 in
@@ -51,10 +52,17 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   '';
 
   nativeBuildInputs = [
+    installShellFiles
     makeWrapper
     nodejs_24
     pnpm
     pnpmConfigHook
+  ];
+
+  nativeCheckInputs = [
+    pkgs.bashInteractive
+    pkgs.fish
+    pkgs.zsh
   ];
 
   buildPhase = ''
@@ -66,6 +74,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   doCheck = true;
   checkPhase = ''
     runHook preCheck
+    export HARKCTL_TEST_BASH=${lib.getExe pkgs.bashInteractive}
     pnpm --dir packages/harkctl test
     runHook postCheck
   '';
@@ -77,6 +86,14 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     cp -r packages/harkctl "$out/lib/harkctl"
     makeWrapper ${lib.getExe nodejs_24} "$out/bin/harkctl" \
       --add-flags "$out/lib/harkctl/bin/harkctl.mjs"
+
+    "$out/bin/harkctl" completions bash > harkctl.bash
+    "$out/bin/harkctl" completions zsh > _harkctl
+    "$out/bin/harkctl" completions fish > harkctl.fish
+    installShellCompletion --cmd harkctl \
+      --bash harkctl.bash \
+      --zsh _harkctl \
+      --fish harkctl.fish
 
     runHook postInstall
   '';

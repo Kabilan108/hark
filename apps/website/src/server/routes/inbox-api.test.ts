@@ -227,9 +227,8 @@ describe("GET /api/inbox/projects", () => {
     expect(body.projects.map((summary) => summary.projectId)).toEqual([
       "prj_app",
       null,
-      "prj_empty",
     ]);
-    const [appProject, unfiled, empty] = body.projects;
+    const [appProject, unfiled] = body.projects;
     expect(appProject).toMatchObject({
       name: "Acme App",
       totalCount: 7,
@@ -244,7 +243,7 @@ describe("GET /api/inbox/projects", () => {
       unreadCount: 1,
       latestTitle: "Unfiled unread",
     });
-    expect(empty).toMatchObject({ projectId: "prj_empty", totalCount: 0, unreadCount: 0 });
+    expect(body.projects.some((entry) => entry.projectId === "prj_empty")).toBe(false);
     expect(body.totalUnread).toBe(5);
     // Foreign account content never leaks into the summary payload.
     expect(JSON.stringify(body)).not.toContain("Foreign");
