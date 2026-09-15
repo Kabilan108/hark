@@ -3,6 +3,29 @@
 `harkctl` sends Hark push notifications, asks approval/text questions, and controls finite agent
 task Live Activities from Node.js 22 or newer.
 
+## Install
+
+Run `harkctl` directly from the repository flake:
+
+```sh
+nix run github:Kabilan108/hark/android-fork#harkctl -- --help
+```
+
+Install it into your Nix profile:
+
+```sh
+nix profile add github:Kabilan108/hark/android-fork#harkctl
+```
+
+The flake provides `harkctl` for x86_64 Linux and aarch64 Linux. The package includes the OpenCode
+client used by the permissions bridge.
+
+For Home Manager, add this repository as a flake input and select the package for the host system:
+
+```nix
+home.packages = [ inputs.hark.packages.${pkgs.stdenv.hostPlatform.system}.harkctl ];
+```
+
 ```
 harkctl
 ├─ auth         login · logout · status
@@ -18,7 +41,7 @@ harkctl
 Start a browser authorization flow and approve the requested scopes with your signed-in Hark account:
 
 ```sh
-npx harkctl auth login
+harkctl auth login
 harkctl auth status
 harkctl notify "Deploy finished ✅" --title "Deploy bot" --image https://example.com/bot.png \
   --url https://example.com/runs/1

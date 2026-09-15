@@ -6,6 +6,20 @@
   outputs =
     { nixpkgs, ... }:
     let
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+      forAllSystems = nixpkgs.lib.genAttrs systems;
+      packageFor =
+        system:
+        import ./nix/harkctl.nix {
+          pkgs = import nixpkgs {
+            inherit system;
+            config.allowUnfree = true;
+          };
+        };
+
       system = "x86_64-linux";
       pkgs = import nixpkgs {
         inherit system;
@@ -56,6 +70,27 @@
       jdk = pkgs.jdk17;
     in
     {
+      packages = forAllSystems (system: rec {
+        default = harkctl;
+        harkctl = packageFor system;
+      });
+
+      apps = forAllSystems (
+        system:
+        let
+          package = packageFor system;
+          app = {
+            type = "app";
+            program = "${nixpkgs.lib.getExe package}";
+            inherit (package) meta;
+          };
+        in
+        {
+          default = app;
+          harkctl = app;
+        }
+      );
+
       devShells.${system}.default = pkgs.mkShell {
         packages = [
           pkgs.nodejs_24
