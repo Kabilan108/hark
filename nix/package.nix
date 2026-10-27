@@ -34,7 +34,10 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   inherit src;
 
   pnpmRoot = "packages/harkctl";
-  # The pnpmDeps hash is tied to the pnpm major version.
+  # Matches the root package.json `packageManager` (pnpm@11). The pnpmDeps hash
+  # depends on the pnpm major, so plain `pnpm` would give different hashes under
+  # this flake's nixpkgs (pnpm 11) and a consumer overlay's (pnpm 12). Move to the
+  # next major together with `packageManager`, and refresh the hash then.
   pnpmDeps = fetchPnpmDeps {
     inherit (finalAttrs)
       pname
