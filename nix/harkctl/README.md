@@ -9,5 +9,5 @@ pnpm --dir "$temp_dir" install --lockfile-only --ignore-scripts
 cp "$temp_dir/pnpm-lock.yaml" nix/harkctl/pnpm-lock.yaml
 ```
 
-Set the `pnpmDeps` hash in `nix/harkctl.nix` to an empty string, build `.#harkctl`, and replace the
+Set the `pnpmDeps` hash in `nix/package.nix` to an empty string, build `.#harkctl`, and replace the
 hash with the value from Nix's mismatch report.

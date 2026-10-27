@@ -1,17 +1,18 @@
-{ pkgs }:
+{
+  lib,
+  stdenvNoCC,
+  fetchPnpmDeps,
+  pnpm_11,
+  pnpmConfigHook,
+  installShellFiles,
+  makeWrapper,
+  nodejs_24,
+  bashInteractive,
+  fish,
+  zsh,
+}:
 
 let
-  inherit (pkgs)
-    fetchPnpmDeps
-    installShellFiles
-    lib
-    makeWrapper
-    nodejs_24
-    pnpm
-    pnpmConfigHook
-    stdenvNoCC
-    ;
-
   root = ../.;
   packageJson = builtins.fromJSON (builtins.readFile ../packages/harkctl/package.json);
   packageSrc = lib.fileset.toSource {
@@ -33,13 +34,17 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   inherit src;
 
   pnpmRoot = "packages/harkctl";
+  # Matches the root package.json `packageManager` (pnpm@11). The pnpmDeps hash
+  # depends on the pnpm major, so plain `pnpm` would give different hashes under
+  # this flake's nixpkgs (pnpm 11) and a consumer overlay's (pnpm 12). Move to the
+  # next major together with `packageManager`, and refresh the hash then.
   pnpmDeps = fetchPnpmDeps {
     inherit (finalAttrs)
       pname
       version
       ;
     src = packageSrc;
-    inherit pnpm;
+    pnpm = pnpm_11;
     fetcherVersion = 4;
     postPatch = ''
       cp ${./harkctl/pnpm-lock.yaml} pnpm-lock.yaml
@@ -55,14 +60,14 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     installShellFiles
     makeWrapper
     nodejs_24
-    pnpm
+    pnpm_11
     pnpmConfigHook
   ];
 
   nativeCheckInputs = [
-    pkgs.bashInteractive
-    pkgs.fish
-    pkgs.zsh
+    bashInteractive
+    fish
+    zsh
   ];
 
   buildPhase = ''
@@ -74,7 +79,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   doCheck = true;
   checkPhase = ''
     runHook preCheck
-    export HARKCTL_TEST_BASH=${lib.getExe pkgs.bashInteractive}
+    export HARKCTL_TEST_BASH=${lib.getExe bashInteractive}
     pnpm --dir packages/harkctl test
     runHook postCheck
   '';
