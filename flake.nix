@@ -13,12 +13,12 @@
       forAllSystems = nixpkgs.lib.genAttrs systems;
       packageFor =
         system:
-        import ./nix/harkctl.nix {
-          pkgs = import nixpkgs {
-            inherit system;
-            config.allowUnfree = true;
-          };
-        };
+        (import nixpkgs {
+          inherit system;
+          config.allowUnfree = true;
+        }).callPackage
+          ./nix/package.nix
+          { };
 
       system = "x86_64-linux";
       pkgs = import nixpkgs {
@@ -70,6 +70,10 @@
       jdk = pkgs.jdk17;
     in
     {
+      overlays.default = final: prev: {
+        harkctl = final.callPackage ./nix/package.nix { };
+      };
+
       packages = forAllSystems (system: rec {
         default = harkctl;
         harkctl = packageFor system;
