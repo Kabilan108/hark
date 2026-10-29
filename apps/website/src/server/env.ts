@@ -8,6 +8,12 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(8787),
   /** SQLite file path. Production containers should point this at /data/hark.sqlite. */
   DATABASE_URL: z.string().min(1).default("./data/hark.sqlite"),
+  /** Generated Drizzle migrations. Unset means `drizzle/` under the working directory. */
+  HARK_MIGRATIONS_DIR: z.string().trim().min(1).optional(),
+  /** Built SPA served by this process. Unset means `dist/client/` under the working directory. */
+  HARK_CLIENT_DIR: z.string().trim().min(1).optional(),
+  /** Published APKs served at /downloads. Unset means `downloads/` inside the client directory. */
+  HARK_DOWNLOADS_DIR: z.string().trim().min(1).optional(),
   /** Public origin the browser uses. In dev this is the Vite server, which proxies /api. */
   APP_URL: z.url().default("http://localhost:5173"),
   BETTER_AUTH_SECRET: z.string().min(16).default(DEV_SECRET),
