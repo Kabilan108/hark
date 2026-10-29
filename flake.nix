@@ -4,21 +4,20 @@
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/2c423e03bbafcff28bfadc6781a4a8257f205cb5";
 
   outputs =
-    { nixpkgs, ... }:
+    { self, nixpkgs, ... }:
     let
       systems = [
         "x86_64-linux"
         "aarch64-linux"
       ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
-      packageFor =
+      pkgsFor =
         system:
-        (import nixpkgs {
+        import nixpkgs {
           inherit system;
           config.allowUnfree = true;
-        }).callPackage
-          ./nix/package.nix
-          { };
+          overlays = [ self.overlays.default ];
+        };
 
       system = "x86_64-linux";
       pkgs = import nixpkgs {
@@ -72,17 +71,32 @@
     {
       overlays.default = final: prev: {
         harkctl = final.callPackage ./nix/package.nix { };
+        hark-server = final.callPackage ./nix/server.nix { };
       };
 
-      packages = forAllSystems (system: rec {
-        default = harkctl;
-        harkctl = packageFor system;
-      });
+      # Expects pkgs.hark-server, from overlays.default or services.hark.package.
+      nixosModules.default = ./nix/module.nix;
+
+      packages = forAllSystems (
+        system:
+        let
+          pkgs = pkgsFor system;
+        in
+        {
+          default = pkgs.harkctl;
+          inherit (pkgs) harkctl hark-server;
+        }
+      );
+
+      checks.${system}.hark-vm = import ./nix/vm-test.nix {
+        pkgs = pkgsFor system;
+        module = self.nixosModules.default;
+      };
 
       apps = forAllSystems (
         system:
         let
-          package = packageFor system;
+          package = (pkgsFor system).harkctl;
           app = {
             type = "app";
             program = "${nixpkgs.lib.getExe package}";
