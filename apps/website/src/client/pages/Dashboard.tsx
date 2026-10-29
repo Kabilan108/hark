@@ -796,14 +796,22 @@ function Devices({
 
   return (
     <section className="mt-16" aria-labelledby="devices-heading">
-      <div className="mb-4">
-        <h2 id="devices-heading" className="text-lg font-semibold">
-          Devices
-        </h2>
-        <p className="mt-1 text-sm text-ink-subtle">
-          Omit <code className="font-mono text-xs text-ink-muted">deviceIds</code> to notify all
-          active devices. Pro can route a webhook to specific IDs.
-        </p>
+      <div className="mb-4 flex items-end justify-between gap-4">
+        <div>
+          <h2 id="devices-heading" className="text-lg font-semibold">
+            Devices
+          </h2>
+          <p className="mt-1 text-sm text-ink-subtle">
+            Omit <code className="font-mono text-xs text-ink-muted">deviceIds</code> to notify all
+            active devices. Pro can route a webhook to specific IDs.
+          </p>
+        </div>
+        <a
+          className="shrink-0 rounded-full border border-line px-3 py-1.5 text-xs font-medium text-ink-muted transition hover:bg-surface-hover"
+          href="/downloads/latest"
+        >
+          Download Android APK
+        </a>
       </div>
       {devices === null ? <p className="py-6 text-sm text-ink-faint">Loading devices…</p> : null}
       {devices?.length === 0 ? (
