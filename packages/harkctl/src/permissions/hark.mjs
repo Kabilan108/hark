@@ -2,12 +2,13 @@ import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadConfig } from "../cli.mjs";
 
 const WAIT_DURATION = "5m";
-const PERMISSION_IMAGE_URLS = {
-  "Claude Code": "https://hark.ryan.ceo/agents/claude.png",
-  Codex: "https://hark.ryan.ceo/agents/codex.png",
-  OpenCode: "https://hark.ryan.ceo/agents/opencode.png",
+const PERMISSION_IMAGE_PATHS = {
+  "Claude Code": "/agents/claude.png",
+  Codex: "/agents/codex.png",
+  OpenCode: "/agents/opencode.png",
 };
 export const REQUIRED_PERMISSION_SCOPES = [
   "notifications:send",
@@ -33,7 +34,7 @@ export function permissionSummary({ agent, cwd, toolName, resourceCount }) {
   return {
     title: `${agentName} permission`,
     body: `${agentName} requests ${tool} permission in ${project} for ${count} resource${count === 1 ? "" : "s"}. Allow once?`,
-    ...(PERMISSION_IMAGE_URLS[agentName] ? { imageUrl: PERMISSION_IMAGE_URLS[agentName] } : {}),
+    ...(PERMISSION_IMAGE_PATHS[agentName] ? { imagePath: PERMISSION_IMAGE_PATHS[agentName] } : {}),
   };
 }
 
@@ -102,7 +103,19 @@ export async function checkHarkAuthentication() {
   return status.authenticated && status.missingScopes.length === 0;
 }
 
-export async function askHarkPermission({ title, body, imageUrl, idempotencyKey }) {
+/** Agent images are served by the configured Hark origin, never a third-party host. */
+export async function permissionImageUrl(imagePath, env = process.env) {
+  if (!imagePath) return undefined;
+  try {
+    const { apiUrl } = await loadConfig(env);
+    return new URL(imagePath, apiUrl).href;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function askHarkPermission({ title, body, imagePath, idempotencyKey }) {
+  const imageUrl = await permissionImageUrl(imagePath);
   try {
     const result = await runHarkctl(
       [
