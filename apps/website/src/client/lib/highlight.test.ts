@@ -55,7 +55,7 @@ describe("tokenizeJson", () => {
 });
 
 describe("tokenizeShell", () => {
-  const curl = `curl -X POST https://hark.ryan.ceo/hooks/whk_token \\
+  const curl = `curl -X POST https://hark.sole-pierce.ts.net/hooks/whk_token \\
   -H 'Content-Type: application/json' \\
   -d '{
     "body": "Production deployed successfully.",
@@ -68,7 +68,7 @@ describe("tokenizeShell", () => {
     assertLossless(curl, tokens);
     expect(kindOf(tokens, "curl")).toBe("command");
     expect(kindOf(tokens, "-X")).toBe("flag");
-    expect(kindOf(tokens, "https://hark.ryan.ceo/hooks/whk_token")).toBe("url");
+    expect(kindOf(tokens, "https://hark.sole-pierce.ts.net/hooks/whk_token")).toBe("url");
     expect(kindOf(tokens, "'Content-Type: application/json'")).toBe("string");
   });
 

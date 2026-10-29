@@ -1,14 +1,15 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
+import { env } from "../env";
 import { db, sqlite } from "./index";
 
 /**
- * Runs generated Drizzle migrations. The migrations folder is resolved from the
- * process working directory, which is apps/website in dev and /app in Docker.
+ * Runs generated Drizzle migrations from HARK_MIGRATIONS_DIR, or from `drizzle/`
+ * under the working directory: apps/website in dev and /app in Docker.
  */
 export function runMigrations(): void {
-  const migrationsFolder = resolve(process.cwd(), "drizzle");
+  const migrationsFolder = resolve(env.HARK_MIGRATIONS_DIR ?? resolve(process.cwd(), "drizzle"));
   if (!existsSync(migrationsFolder)) {
     throw new Error(`Migrations folder not found at ${migrationsFolder}`);
   }

@@ -229,8 +229,9 @@ harkctl permissions uninstall all
 
 The default login includes the required `notifications:send`, `interactions:create`, and
 `interactions:read` scopes. A narrowed login must retain all three; setup and `doctor` identify any
-missing scopes. See the [agent permission setup guide](https://hark.ryan.ceo/docs#cli-permissions)
-for privacy, trust, and platform details.
+missing scopes. See the
+[agent permission setup guide](https://hark.sole-pierce.ts.net/docs#cli-permissions) for privacy,
+trust, and platform details.
 
 Claude Code and Codex use synchronous `PermissionRequest` hooks. After Codex setup, open `/hooks`
 and trust the Hark hook. OpenCode setup installs both connectors: a V1 plugin shim for current V1

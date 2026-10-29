@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { permissionSummary } from "../src/permissions/hark.mjs";
+import { permissionImageUrl, permissionSummary } from "../src/permissions/hark.mjs";
 import { handlePermissionHook, hookDecision } from "../src/permissions/hook.mjs";
 
 test("summaries exclude raw commands and absolute paths", () => {
@@ -16,14 +16,27 @@ test("summaries exclude raw commands and absolute paths", () => {
   assert.equal(summary.title, "Claude Code permission");
   assert.match(summary.body, /Bash permission in hark for 2 resources/);
   assert.doesNotMatch(summary.body, /Users|private/);
-  assert.equal(summary.imageUrl, "https://hark.ryan.ceo/agents/claude.png");
+  assert.equal(summary.imagePath, "/agents/claude.png");
   assert.equal(
-    permissionSummary({ agent: "Codex", cwd: "/tmp/hark", toolName: "Bash" }).imageUrl,
-    "https://hark.ryan.ceo/agents/codex.png",
+    permissionSummary({ agent: "Codex", cwd: "/tmp/hark", toolName: "Bash" }).imagePath,
+    "/agents/codex.png",
   );
   assert.equal(
-    permissionSummary({ agent: "OpenCode", cwd: "/tmp/hark", toolName: "shell" }).imageUrl,
-    "https://hark.ryan.ceo/agents/opencode.png",
+    permissionSummary({ agent: "OpenCode", cwd: "/tmp/hark", toolName: "shell" }).imagePath,
+    "/agents/opencode.png",
+  );
+});
+
+test("permission images resolve against the configured Hark origin", async () => {
+  const env = { HARK_TOKEN: "hark_test", HARK_API_URL: "https://hark.example.test/" };
+  assert.equal(
+    await permissionImageUrl("/agents/claude.png", env),
+    "https://hark.example.test/agents/claude.png",
+  );
+  assert.equal(await permissionImageUrl(undefined, env), undefined);
+  assert.equal(
+    await permissionImageUrl("/agents/claude.png", { HARK_CONFIG: "/nonexistent/hark.json" }),
+    undefined,
   );
 });
 
@@ -41,7 +54,7 @@ test("Claude and Codex hooks map only explicit approval to allow", async () => {
   });
   assert.deepEqual(approved, hookDecision("claude", true));
   assert.doesNotMatch(JSON.stringify(sent), /secret-value/);
-  assert.equal(sent.imageUrl, "https://hark.ryan.ceo/agents/claude.png");
+  assert.equal(sent.imagePath, "/agents/claude.png");
 
   const denied = await handlePermissionHook("codex", input, async () => "denied");
   assert.deepEqual(denied, hookDecision("codex", false));

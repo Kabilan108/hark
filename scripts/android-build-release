@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "$script_dir/.." && pwd)"
-signing_properties="${HARK_ANDROID_SIGNING_PROPERTIES:-/vault/userdata/hark/secrets/android-release-signing.properties}"
+signing_properties="${HARK_ANDROID_SIGNING_PROPERTIES:-/run/agenix/hark-android-signing-properties}"
 architectures="${HARK_ANDROID_ARCHITECTURES:-arm64-v8a,x86_64}"
 output_apk="${HARK_ANDROID_RELEASE_APK:-}"
 configure_only=false
@@ -50,7 +50,7 @@ if [[ -z "$output_apk" ]]; then
       process.stdout.write(version);
     });
   ')"
-  output_apk="/vault/userdata/hark/builds/hark-android-$app_version.apk"
+  output_apk="/vault/userdata/hark-downloads/hark-android-$app_version.apk"
 fi
 corepack pnpm --filter @hark/expo exec expo prebuild -p android --clean --no-install
 
@@ -156,9 +156,16 @@ apps/expo/android/gradlew \
   "-PreactNativeArchitectures=$architectures"
 
 generated_apk="$repo_root/apps/expo/android/app/build/outputs/apk/release/app-release.apk"
-mkdir -p "$(dirname -- "$output_apk")"
-install -m 0644 "$generated_apk" "$output_apk"
+output_dir="$(dirname -- "$output_apk")"
+mkdir -p "$output_dir"
+# The backend serves this directory, so the versioned name appears only once
+# the APK is complete and verified. The dotted name is ignored by /downloads/latest.
+staged_apk="$(mktemp "$output_dir/.$(basename -- "$output_apk").XXXXXX")"
+trap 'rm -f -- "$staged_apk"' EXIT
+install -m 0644 "$generated_apk" "$staged_apk"
+"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$staged_apk"
+mv -f -- "$staged_apk" "$output_apk"
+trap - EXIT
 
-"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$output_apk"
 sha256sum "$output_apk"
 printf 'Release APK: %s\n' "$output_apk"

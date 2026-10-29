@@ -8,6 +8,7 @@ import { runMigrations } from "./db/migrate";
 import { assertRuntimeEnv, env } from "./env";
 import { pruneAnalytics } from "./lib/analytics";
 import { startInteractionCallbackWorker } from "./lib/interaction-callbacks";
+import { downloadsRoute } from "./routes/downloads";
 
 assertRuntimeEnv();
 runMigrations();
@@ -18,7 +19,11 @@ startInteractionCallbackWorker();
 // In production the same process serves prerendered public pages and explicit
 // noindex shells for private application routes. Unknown paths remain real 404s
 // instead of becoming indexable soft-404 copies of the home page.
-const clientDir = resolve(process.cwd(), "dist/client");
+const clientDir = resolve(env.HARK_CLIENT_DIR ?? resolve(process.cwd(), "dist/client"));
+const downloadsDir = resolve(env.HARK_DOWNLOADS_DIR ?? resolve(clientDir, "downloads"));
+if (existsSync(downloadsDir)) {
+  app.route("/", downloadsRoute(downloadsDir));
+}
 if (existsSync(clientDir)) {
   const documentRoutes = [
     "/",
@@ -31,14 +36,16 @@ if (existsSync(clientDir)) {
   ];
   for (const path of documentRoutes) {
     const file = path === "/" ? "index.html" : `${path.slice(1)}/index.html`;
-    if (existsSync(resolve(clientDir, file))) {
-      app.get(path, serveStatic({ path: `./dist/client/${file}` }));
+    const filePath = resolve(clientDir, file);
+    if (existsSync(filePath)) {
+      app.get(path, serveStatic({ path: filePath }));
     }
   }
-  if (existsSync(resolve(clientDir, "cli/authorize/index.html"))) {
-    app.get("/cli/authorize", serveStatic({ path: "./dist/client/cli/authorize/index.html" }));
+  const cliAuthorizePath = resolve(clientDir, "cli/authorize/index.html");
+  if (existsSync(cliAuthorizePath)) {
+    app.get("/cli/authorize", serveStatic({ path: cliAuthorizePath }));
   }
-  app.use("*", serveStatic({ root: "./dist/client" }));
+  app.use("*", serveStatic({ root: clientDir }));
 }
 
 const server = serve({ fetch: app.fetch, hostname: env.HOST, port: env.PORT }, (info) => {

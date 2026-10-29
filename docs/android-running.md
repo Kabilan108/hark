@@ -16,7 +16,9 @@ Build the backend:
 direnv exec "$PWD" corepack pnpm --filter @hark/website build
 ```
 
-Start from `apps/website` with `node --env-file=/absolute/path/backend.env dist/server/index.js` inside the dev shell. This working directory is required for the static assets and migrations. The process runs migrations before listening. Its health endpoint is `/api/health`.
+Start from `apps/website` with `node --env-file=/absolute/path/backend.env dist/server/index.js` inside the dev shell. From that directory the server finds `drizzle/` and `dist/client/`; elsewhere, set `HARK_MIGRATIONS_DIR` and `HARK_CLIENT_DIR`. `HARK_DOWNLOADS_DIR` holds published APKs and defaults to `dist/client/downloads/`. The process runs migrations before listening. Its health endpoint is `/api/health`.
+
+A development backend for an emulator build runs from the checkout with `direnv exec "$PWD" corepack pnpm --filter @hark/website dev:api`. It listens on port 8788 and reads the repository's `.env`. Link `.env` to a development environment file that leaves `DATABASE_URL` unset, so the database is `apps/website/data/hark.sqlite`; never link it to production settings. Google sign-in against it needs its own registered redirect URI.
 
 On sietch, Hark uses `https://hark.sole-pierce.ts.net`, proxied by Tailscale Services to `127.0.0.1:8787`. The base host port 443 belongs to T3. Preserve other Serve mappings. External webhook senders cannot reach this private endpoint; a public deployment or separately authorized ingress is needed for them.
 
@@ -31,19 +33,15 @@ Use the repository's Android emulator scripts from the dev shell. Always give AD
 Build a signed standalone APK with the maintained release script:
 
 ```sh
-direnv exec "$PWD" env \
-  HARK_ANDROID_SIGNING_PROPERTIES=/vault/userdata/hark/secrets/android-release-signing.properties \
-  scripts/android-build-release
+direnv exec "$PWD" scripts/android-build-release
 ```
 
-The signing properties file must remain outside the repository with mode `600`. It uses Java properties syntax and contains `HARK_RELEASE_STORE_FILE`, `HARK_RELEASE_STORE_PASSWORD`, `HARK_RELEASE_KEY_ALIAS`, and `HARK_RELEASE_KEY_PASSWORD`. The script runs a clean Expo Android prebuild, adds release signing to the generated Gradle project, builds `arm64-v8a` and `x86_64`, verifies the APK signature, and copies the APK to `/vault/userdata/hark/builds/hark-android-<version>.apk`. Set `HARK_ANDROID_RELEASE_APK` to override that destination. It passes Gradle the properties-file path without putting passwords on the command line. Keep the keystore and properties file together in a private backup. Losing the keystore prevents signing an upgrade for an installed release.
+The signing properties default to `/run/agenix/hark-android-signing-properties`, decrypted from dotfiles on sietch; set `HARK_ANDROID_SIGNING_PROPERTIES` to use another file. The file must remain outside the repository and must not be readable by group or other users. It uses Java properties syntax and contains `HARK_RELEASE_STORE_FILE`, `HARK_RELEASE_STORE_PASSWORD`, `HARK_RELEASE_KEY_ALIAS`, and `HARK_RELEASE_KEY_PASSWORD`. The script runs a clean Expo Android prebuild, adds release signing to the generated Gradle project, builds `arm64-v8a` and `x86_64`, verifies the APK signature, and publishes the APK as `/vault/userdata/hark-downloads/hark-android-<version>.apk`, which the backend serves immediately. Set `HARK_ANDROID_RELEASE_APK` to override that destination. It passes Gradle the properties-file path without putting passwords on the command line. The keystore and properties file are agenix secrets in dotfiles, with a copy in Vaultwarden. Losing the keystore prevents signing an upgrade for an installed release.
 
 To regenerate and inspect the signed Gradle configuration without compiling an APK, use:
 
 ```sh
-direnv exec "$PWD" env \
-  HARK_ANDROID_SIGNING_PROPERTIES=/vault/userdata/hark/secrets/android-release-signing.properties \
-  scripts/android-build-release --configure-only
+direnv exec "$PWD" scripts/android-build-release --configure-only
 ```
 
 After signing in, grant notification permission. Enable watched activities in settings for ongoing progress notifications. Android decides whether eligible notifications receive promoted Live Update presentation. Ordinary progress notifications remain the fallback.
@@ -58,12 +56,23 @@ Keep release signing material outside Git and retain it for future upgrades. Emu
 
 Use SQLite's online backup operation while the process runs. Do not copy only the main database file while WAL writes are active. A clean shutdown checkpoints the WAL. Restore a backup to a separate path and run `PRAGMA integrity_check` before relying on it.
 
+On sietch the database belongs to the `hark` user, so run the backup as that user:
+
+```sh
+sudo -u hark sqlite3 /vault/userdata/hark-server/hark.sqlite \
+  ".backup /vault/userdata/hark-server/backups/hark-$(date -u +%Y%m%dT%H%M%SZ).sqlite"
+```
+
+Scheduled off-host backups of `/vault/userdata/hark-server/` and the Android release material in `/vault/userdata/hark/` belong to the fleet-wide backup setup in dotfiles.
+
 ## NixOS service on sietch
 
-The active system service is declared in `~/dotfiles/modules/nixos/selfhost/hark.nix`. It runs Node 24 against this checkout's built website, reads `/vault/userdata/hark/secrets/backend.env`, and uses the existing SQLite database. It does not build during boot. Keep the checkout, dependencies, built assets, and private environment file available. Secrets stay outside the Nix store.
+The flake exports `packages.hark-server`, `overlays.default` (adding `hark-server` and `harkctl`) and `nixosModules.default` (`services.hark`). dotfiles imports the module in `modules/nixos/selfhost/hark.nix` and runs a pinned build of this repository from its `hark` input, as the `hark` system user. The checkout is not used at runtime.
 
-Use `sudo systemctl restart hark` after backend builds and `journalctl -u hark` for logs. The former user service is disabled and inactive. Its old port-8443 Tailscale mapping has been removed. T3 and other Tailscale Services are unchanged.
+- State: `/vault/userdata/hark-server/hark.sqlite`, owned by `hark` with mode 0700. The unit refuses to start if the database is missing, so an unmounted volume cannot start an empty instance.
+- Secrets: agenix `selfhost-hark-env` (environment) and `selfhost-hark-fcm-service-account` (passed as a systemd credential). The unit itself sets `HOST`, `PORT`, `DATABASE_URL`, `NODE_ENV` and `FCM_SERVICE_ACCOUNT_FILE`; keep them out of the environment file, which would override them.
+- Downloads: `/vault/userdata/hark-downloads/`, read-only to the service. `/downloads/latest` redirects to the newest release.
 
-The canonical origin, app API URL, CLI default, and Google OAuth callback now use `https://hark.sole-pierce.ts.net`. The Google redirect is `/api/auth/callback/google` on that origin. Existing webhook tokens remain valid with the new hostname; copy the updated URL from the dashboard.
+To deploy a change, merge it to `main`, run `nix flake update hark` in dotfiles, and rebuild sietch. Use `journalctl -u hark` for logs. `nix build .#checks.x86_64-linux.hark-vm` runs the module in a NixOS VM.
 
-After each website build, restore versioned APKs from `/vault/userdata/hark/builds/` to `apps/website/dist/client/downloads/`. The current download is `/downloads/hark-android-1.3.0.apk`.
+The canonical origin, app API URL, CLI default, and Google OAuth callback use `https://hark.sole-pierce.ts.net`, proxied by Tailscale Services to `127.0.0.1:8787`. The Google redirect is `/api/auth/callback/google` on that origin.
